@@ -37,17 +37,44 @@ async function refreshAuthUI() {
 }
 sb.auth.onAuthStateChange((_evt, s) => { session = s; refreshAuthUI(); });
 
-$('#send-link').addEventListener('click', async () => {
+let pendingEmail = '';
+async function sendCode() {
   const email = $('#email').value.trim();
   if (!email) return toast('이메일을 입력해 주세요');
-  const btn = $('#send-link');
+  const btn = $('#send-code');
   btn.disabled = true;
-  const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: location.href.split('#')[0] } });
+  btn.textContent = '보내는 중…';
+  const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
   btn.disabled = false;
+  btn.textContent = '코드 받기';
   if (error) return toast('전송 실패: ' + error.message);
-  $('#link-status').hidden = false;
-  $('#link-status').textContent = `${email} 로 로그인 링크를 보냈습니다. 메일함(스팸함도)을 확인해 주세요.`;
+  pendingEmail = email;
+  $('#code-sent-to').textContent = email;
+  $('#step-email').hidden = true;
+  $('#step-code').hidden = false;
+  $('#code').value = '';
+  $('#code').focus();
+}
+$('#send-code').addEventListener('click', sendCode);
+$('#email').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendCode(); });
+
+$('#verify-code').addEventListener('click', async () => {
+  const code = $('#code').value.trim();
+  if (!/^\d{6}$/.test(code)) return toast('6자리 숫자를 입력해 주세요');
+  const btn = $('#verify-code');
+  btn.disabled = true;
+  btn.textContent = '확인 중…';
+  const { error } = await sb.auth.verifyOtp({ email: pendingEmail, token: code, type: 'email' });
+  btn.disabled = false;
+  btn.textContent = '로그인';
+  if (error) return toast('코드가 맞지 않거나 만료됐습니다: ' + error.message);
+  $('#step-email').hidden = false;
+  $('#step-code').hidden = true;
 });
+$('#code').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#verify-code').click(); });
+$('#resend-code').addEventListener('click', sendCode);
+$('#change-email').addEventListener('click', () => { $('#step-email').hidden = false; $('#step-code').hidden = true; });
+
 $('#logout').addEventListener('click', async () => { await sb.auth.signOut(); draft = null; renderDraft(); });
 
 // ── 붙여넣기 → 파싱 ──
