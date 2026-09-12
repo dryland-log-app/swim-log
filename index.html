@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Swim Log</title>
+<meta name="theme-color" content="#F7F8FA">
+<style>
+:root{
+  color-scheme: light dark;
+  --bg:#F7F8FA; --s1:#FFFFFF; --s2:#EEF1F4; --line:#E2E6EA;
+  --ink:#16212B; --ink2:#57646F; --mute:#8B96A1;
+  --acc:#1C86C9; --acc-ink:#FFFFFF; --warn-bg:#FEF6E6; --warn-ink:#8A5A00; --danger:#C23B32;
+  --sans:system-ui,-apple-system,"Noto Sans KR",sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#0B1216; --s1:#131D23; --s2:#1A272E; --line:#22313A;
+    --ink:#E6EEF1; --ink2:#A9BAC2; --mute:#6F848E;
+    --acc:#3BB4E6; --acc-ink:#04202C; --warn-bg:#2B2410; --warn-ink:#F2B544; --danger:#FF8A80;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5;padding-bottom:60px}
+.wrap{max-width:720px;margin:0 auto;padding:20px 16px}
+h1{font-size:22px;margin:0 0 4px}
+h2{font-size:17px;margin:0 0 10px}
+.muted{color:var(--mute)} .small{font-size:13px}
+.card{background:var(--s1);border-radius:14px;padding:16px;margin-bottom:16px;border:1px solid var(--line)}
+label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--ink2)}
+label.block{display:flex;margin-top:10px}
+input,textarea,select{font:inherit;color:var(--ink);background:var(--s2);border:1px solid var(--line);border-radius:8px;padding:9px 10px}
+textarea{resize:vertical;min-height:70px;font-family:ui-monospace,monospace;font-size:13px}
+button{font:inherit;cursor:pointer;border:0;border-radius:9px;padding:10px 16px;background:var(--s2);color:var(--ink)}
+button.primary{background:var(--acc);color:var(--acc-ink);font-weight:600}
+button.ghost{background:transparent;border:1px solid var(--line)}
+button.sm{padding:5px 10px;font-size:12px}
+button:disabled{opacity:.5;cursor:default}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+.row.end{justify-content:flex-end}
+.row:first-child{margin-top:0}
+#toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:13px;z-index:10}
+.warn{background:var(--warn-bg);color:var(--warn-ink);padding:8px 12px;border-radius:8px;font-size:13px;margin:0 0 12px}
+.set-block{border-top:1px solid var(--line);padding-top:14px;margin-top:14px}
+table.laps{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px}
+table.laps th{text-align:left;color:var(--mute);font-weight:500;font-size:11px;padding:4px 4px}
+table.laps td{padding:3px 4px}
+table.laps input,table.laps select{padding:6px 7px;font-size:13px}
+tr.flag{background:var(--warn-bg)}
+.recent-row{display:block;width:100%;text-align:left;background:var(--s1);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px}
+.recent-row b{margin-right:8px}
+.detail{display:block;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
+.set-line{padding:4px 0}
+#link-status{background:var(--s2);padding:8px 12px;border-radius:8px;font-size:13px;margin-top:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Swim Log</h1>
+  <p class="muted small">수영 훈련 텍스트를 붙여넣으면 세트/랩으로 정리해 드립니다.</p>
+
+  <div id="anon" class="card" hidden>
+    <h2>로그인</h2>
+    <p class="small muted">비밀번호 없이, 이메일로 받는 링크를 눌러 로그인합니다.</p>
+    <div class="row">
+      <input id="email" type="email" placeholder="you@example.com" style="flex:1;min-width:200px">
+      <button class="primary" id="send-link">로그인 링크 보내기</button>
+    </div>
+    <div id="link-status" hidden></div>
+  </div>
+
+  <div id="authed" hidden>
+    <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <span class="small muted">로그인: <b id="whoami" style="color:var(--ink)"></b></span>
+      <button class="ghost sm" id="logout">로그아웃</button>
+    </div>
+
+    <div class="card">
+      <h2>새 훈련 로그 붙여넣기</h2>
+      <textarea id="raw-text" rows="10" placeholder="예)
+9/12(금) 충무
+50m x 8 (1'40&quot;)
+1. 자 33.39
+2. 접 40.12
+...휴식 45초..."></textarea>
+      <div class="row end"><button class="primary" id="parse-btn">파싱하기</button></div>
+    </div>
+
+    <div id="draft-card" class="card" hidden></div>
+
+    <div class="card">
+      <h2>최근 기록</h2>
+      <div id="recent"></div>
+    </div>
+  </div>
+</div>
+<div id="toast" hidden></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="parser.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
