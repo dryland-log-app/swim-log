@@ -9,8 +9,8 @@ const sb = supabase.createClient(window.SUPABASE_URL, window.SUPABASE_KEY);
 const SET_TYPES = [['warmup', '웜업'], ['main', '메인'], ['sprint', '스프린트'], ['underwater', '잠영'], ['dolphin', '돌핀킥'], ['down', '다운'], ['other', '기타']];
 const STROKES = [['unknown', '미지정'], ['free', '자유형'], ['fly', '접영'], ['back', '배영'], ['breast', '평영'], ['im', 'IM'], ['mixed', '혼합']];
 
-let session = null;   // supabase auth session
-let draft = null;     // 파싱해서 화면에 올려둔, 아직 저장 안 한 세션
+let session = null;      // supabase auth session
+let draftDays = null;    // 파싱해서 화면에 올려둔, 아직 저장 안 한 날짜들 (1개든 여러 개든 배열)
 // toISOString()은 UTC 기준이라 한국(UTC+9)에서는 자정 근처에 날짜가 하루 밀립니다.
 // 반드시 로컬 날짜 값(getFullYear/Month/Date)으로 직접 조합합니다.
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -76,34 +76,36 @@ $('#code').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#verif
 $('#resend-code').addEventListener('click', sendCode);
 $('#change-email').addEventListener('click', () => { $('#step-email').hidden = false; $('#step-code').hidden = true; });
 
-$('#logout').addEventListener('click', async () => { await sb.auth.signOut(); draft = null; renderDraft(); });
+$('#logout').addEventListener('click', async () => { await sb.auth.signOut(); draftDays = null; renderDraft(); });
 
 // ── 붙여넣기 → 파싱 ──
+// 날짜가 하나든 여러 개 섞여 있든 같은 방식으로 처리합니다. 앞에 날짜 줄이 없으면 오늘 날짜 하루로 취급합니다.
 $('#parse-btn').addEventListener('click', () => {
   const raw = $('#raw-text').value;
   if (!raw.trim()) return toast('붙여넣은 내용이 없습니다');
-  const { meta, blocks } = P.splitSwimText(raw);
-  if (!blocks.length) return toast('세트를 찾지 못했습니다. "50m x 8" 같은 형식의 줄이 있는지 확인해 주세요');
-
-  const now = new Date();
-  let sessionDate = today();
-  if (meta) {
-    const y = now.getFullYear();
-    const d = new Date(y, meta.month - 1, meta.day);
-    if (d.getTime() - now.getTime() > 86400000) d.setFullYear(y - 1); // 미래 날짜면 작년으로 보정 (예: 1월에 12월 로그 입력)
-    sessionDate = isoLocal(d);
+  let days = P.splitSwimLog(raw);
+  if (!days.length) {
+    const { meta, note, blocks } = P.splitSwimText(raw);
+    if (!blocks.length) return toast('세트를 찾지 못했습니다. "50m x 8" 같은 형식의 줄이 있는지 확인해 주세요');
+    let sessionDate = today();
+    if (meta) {
+      const now = new Date();
+      const d = new Date(now.getFullYear(), meta.month - 1, meta.day);
+      if (d.getTime() - now.getTime() > 86400000) d.setFullYear(d.getFullYear() - 1);
+      sessionDate = isoLocal(d);
+    }
+    days = [{ date: sessionDate, location: (meta && meta.location) || '', poolLength: (meta && meta.poolLength) || 25, note, blocks }];
   }
-
-  draft = {
-    date: sessionDate,
-    location: (meta && meta.location) || '',
-    poolLength: 25,
-    condition: '',
-    blocks: blocks.map((b, i) => blockToDraft(b, i)),
-  };
+  draftDays = days.map(dayToDraft);
   renderDraft();
   $('#draft-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
+function dayToDraft(day, di) {
+  return {
+    date: day.date, location: day.location || '', poolLength: day.poolLength || 25, condition: day.note || '',
+    blocks: day.blocks.map((b, i) => blockToDraft(b, `${di}-${i}`)),
+  };
+}
 
 function guessStroke(laps) {
   const s = new Set(laps.map((l) => l.strokeOverride).filter(Boolean));
@@ -114,7 +116,7 @@ function guessStroke(laps) {
 function blockToDraft(b, i) {
   const h = b.header || {};
   return {
-    key: 'b' + i,
+    key: 'b' + i, // 날짜 인덱스까지 포함된 값이라 여러 날짜를 한 화면에 그려도 서로 안 겹칩니다
     setType: 'main',
     stroke: guessStroke(b.laps),
     distance: h.distance ?? null,
@@ -135,36 +137,55 @@ function blockToDraft(b, i) {
   };
 }
 
-// ── 검수 화면 렌더링 ──
+// ── 검수 화면 렌더링 (날짜가 여러 개면 하나씩 이어서 보여줌) ──
 function renderDraft() {
   const box = $('#draft-card');
-  if (!draft) { box.hidden = true; return; }
+  if (!draftDays || !draftDays.length) { box.hidden = true; return; }
   box.hidden = false;
-  const flagged = draft.blocks.reduce((n, b) => n + b.laps.filter((l) => l.needsReview).length, 0);
+  const totalFlagged = draftDays.reduce((n, d) => n + d.blocks.reduce((m, b) => m + b.laps.filter((l) => l.needsReview).length, 0), 0);
   box.innerHTML = `
-    <h2>기록 확인</h2>
-    ${flagged ? `<p class="warn">⚠️ 확인이 필요한 랩 ${flagged}개가 노란색으로 표시돼 있습니다. 값을 고치거나, 문제없으면 그대로 저장해도 됩니다.</p>` : ''}
-    <div class="row">
-      <label>날짜<input id="d-date" type="date" value="${draft.date}"></label>
-      <label>장소<input id="d-loc" value="${esc(draft.location)}" placeholder="충무"></label>
-      <label>풀 길이<select id="d-pool"><option value="25"${draft.poolLength == 25 ? ' selected' : ''}>25m</option><option value="50"${draft.poolLength == 50 ? ' selected' : ''}>50m</option></select></label>
-    </div>
-    <label class="block">컨디션/메모<textarea id="d-note" rows="2" placeholder="컨디션, 특이사항">${esc(draft.condition)}</textarea></label>
-    <div id="blocks"></div>
+    <h2>기록 확인 ${draftDays.length > 1 ? `<span class="small muted">· ${draftDays.length}일치</span>` : ''}</h2>
+    ${totalFlagged ? `<p class="warn">⚠️ 확인이 필요한 랩 ${totalFlagged}개가 노란색으로 표시돼 있습니다. 값을 고치거나, 문제없으면 그대로 저장해도 됩니다.</p>` : ''}
+    <div id="day-list"></div>
     <div class="row end">
-      <button class="ghost" id="cancel-draft">취소</button>
-      <button class="primary" id="save-draft">저장</button>
+      <button class="ghost" id="cancel-draft">전체 취소</button>
+      <button class="primary" id="save-draft">${draftDays.length > 1 ? `${draftDays.length}일 전체 저장` : '저장'}</button>
     </div>`;
-  $('#d-date').onchange = (e) => (draft.date = e.target.value);
-  $('#d-loc').oninput = (e) => (draft.location = e.target.value);
-  $('#d-pool').onchange = (e) => (draft.poolLength = +e.target.value);
-  $('#d-note').oninput = (e) => (draft.condition = e.target.value);
-  $('#cancel-draft').onclick = () => { draft = null; renderDraft(); };
-  $('#save-draft').onclick = saveDraft;
+  $('#cancel-draft').onclick = () => { draftDays = null; renderDraft(); };
+  $('#save-draft').onclick = saveAllDrafts;
 
-  const blocksEl = $('#blocks');
-  blocksEl.innerHTML = draft.blocks.map(blockHtml).join('');
-  draft.blocks.forEach((b) => wireBlock(b));
+  const list = $('#day-list');
+  list.innerHTML = draftDays.map((d, di) => dayCardHtml(d, di)).join('');
+  draftDays.forEach((d, di) => wireDayCard(d, di));
+}
+
+function dayCardHtml(d, di) {
+  const flagged = d.blocks.reduce((n, b) => n + b.laps.filter((l) => l.needsReview).length, 0);
+  return `<div class="day-card" data-di="${di}">
+    <div class="row" style="justify-content:space-between;align-items:flex-start">
+      <div class="row" style="margin:0">
+        <label>날짜<input data-df="date" type="date" value="${d.date}"></label>
+        <label>장소<input data-df="location" value="${esc(d.location)}" placeholder="충무"></label>
+        <label>풀 길이<select data-df="poolLength"><option value="25"${d.poolLength == 25 ? ' selected' : ''}>25m</option><option value="50"${d.poolLength == 50 ? ' selected' : ''}>50m</option></select></label>
+      </div>
+      ${draftDays.length > 1 ? `<button class="ghost sm" data-act="remove-day">이 날짜 제외</button>` : ''}
+    </div>
+    ${flagged ? `<div class="small" style="color:var(--warn-ink)">확인 필요 ${flagged}개</div>` : ''}
+    <label class="block">컨디션/메모<textarea data-df="condition" rows="2" placeholder="컨디션, 특이사항">${esc(d.condition)}</textarea></label>
+    <div class="blocks">${d.blocks.map(blockHtml).join('')}</div>
+  </div>`;
+}
+function wireDayCard(d, di) {
+  const el = $(`.day-card[data-di="${di}"]`);
+  if (!el) return;
+  el.querySelectorAll(':scope > .row [data-df], :scope > label [data-df]').forEach((input) => {
+    const f = input.dataset.df;
+    const ev = input.tagName === 'SELECT' ? 'change' : 'input';
+    input.addEventListener(ev, () => (d[f] = f === 'poolLength' ? +input.value : input.value));
+  });
+  const removeBtn = el.querySelector('[data-act="remove-day"]');
+  if (removeBtn) removeBtn.onclick = () => { draftDays.splice(di, 1); renderDraft(); };
+  d.blocks.forEach((b) => wireBlock(b));
 }
 
 function blockHtml(b) {
@@ -227,70 +248,78 @@ function renderBlockLaps(b) {
   wireBlock(b);
 }
 
-// ── 저장 ──
-async function saveDraft() {
-  if (!draft || !session) return;
+// ── 저장 (하루치를 실제로 Supabase에 넣는 부분 — 날짜 1개짜리든 여러 개 묶음이든 이걸 반복 호출) ──
+async function saveOneDay(day) {
+  const [yy, mm, dd] = day.date.split('-').map(Number);
+  const weekday = ['일', '월', '화', '수', '목', '금', '토'][new Date(yy, mm - 1, dd).getDay()];
+  const { data: sessRow, error: e1 } = await sb.from('sessions').insert({
+    user_id: session.user.id,
+    session_date: day.date,
+    weekday,
+    location: day.location || null,
+    pool_length: day.poolLength,
+    condition_note: day.condition || null,
+  }).select().single();
+  if (e1) throw e1;
+
+  for (let i = 0; i < day.blocks.length; i++) {
+    const b = day.blocks[i];
+    const intervalSec = b.intervalRaw ? P.toSeconds(b.intervalRaw) : null;
+    const { data: setRow, error: e2 } = await sb.from('sets').insert({
+      session_id: sessRow.id,
+      order_index: i,
+      set_type: b.setType,
+      stroke: b.stroke,
+      distance: b.distance,
+      rep_count: b.repCount,
+      interval_mode: intervalSec ? 'fixed_interval' : 'none',
+      interval_or_pace_sec: intervalSec,
+      raw_header: b.rawHeader || null,
+    }).select().single();
+    if (e2) throw e2;
+
+    const lapRows = b.laps.map((l) => ({
+      set_id: setRow.id,
+      rep_no: l.repNo,
+      time_sec: l.timeRaw ? P.toSeconds(l.timeRaw) : null,
+      rest_sec: l.restRaw ? P.toSeconds(l.restRaw) : null,
+      stroke_override: l.strokeOverride || null,
+      stroke_count: l.strokeCount || null,
+      is_missing: !!l.isMissing,
+      needs_review: !!l.needsReview,
+      note: l.note || null,
+      raw_text: l.rawText || null,
+    }));
+    if (lapRows.length) {
+      const { error: e3 } = await sb.from('laps').insert(lapRows);
+      if (e3) throw e3;
+    }
+  }
+}
+
+async function saveAllDrafts() {
+  if (!draftDays || !draftDays.length || !session) return;
   const btn = $('#save-draft');
   btn.disabled = true;
-  btn.textContent = '저장 중…';
+  const total = draftDays.length;
+  let saved = 0;
   try {
-    const [yy, mm, dd] = draft.date.split('-').map(Number);
-    const weekday = ['일', '월', '화', '수', '목', '금', '토'][new Date(yy, mm - 1, dd).getDay()];
-    const { data: sessRow, error: e1 } = await sb.from('sessions').insert({
-      user_id: session.user.id,
-      session_date: draft.date,
-      weekday,
-      location: draft.location || null,
-      pool_length: draft.poolLength,
-      condition_note: draft.condition || null,
-    }).select().single();
-    if (e1) throw e1;
-
-    for (let i = 0; i < draft.blocks.length; i++) {
-      const b = draft.blocks[i];
-      const intervalSec = b.intervalRaw ? P.toSeconds(b.intervalRaw) : null;
-      const { data: setRow, error: e2 } = await sb.from('sets').insert({
-        session_id: sessRow.id,
-        order_index: i,
-        set_type: b.setType,
-        stroke: b.stroke,
-        distance: b.distance,
-        rep_count: b.repCount,
-        interval_mode: intervalSec ? 'fixed_interval' : 'none',
-        interval_or_pace_sec: intervalSec,
-        raw_header: b.rawHeader || null,
-      }).select().single();
-      if (e2) throw e2;
-
-      const lapRows = b.laps.map((l) => ({
-        set_id: setRow.id,
-        rep_no: l.repNo,
-        time_sec: l.timeRaw ? P.toSeconds(l.timeRaw) : null,
-        rest_sec: l.restRaw ? P.toSeconds(l.restRaw) : null,
-        stroke_override: l.strokeOverride || null,
-        stroke_count: l.strokeCount || null,
-        is_missing: !!l.isMissing,
-        needs_review: !!l.needsReview,
-        note: l.note || null,
-        raw_text: l.rawText || null,
-      }));
-      if (lapRows.length) {
-        const { error: e3 } = await sb.from('laps').insert(lapRows);
-        if (e3) throw e3;
-      }
+    for (const day of draftDays) {
+      btn.textContent = total > 1 ? `저장 중… (${saved + 1}/${total})` : '저장 중…';
+      await saveOneDay(day);
+      saved++;
     }
-
-    toast('저장했습니다');
-    draft = null;
+    toast(total > 1 ? `${total}일 전체 저장했습니다` : '저장했습니다');
+    draftDays = null;
     $('#raw-text').value = '';
     renderDraft();
     loadRecent();
     loadBests();
   } catch (err) {
-    toast('저장 실패: ' + err.message);
+    toast(`${saved}/${total}일 저장 후 실패: ${err.message}`);
   } finally {
     btn.disabled = false;
-    btn.textContent = '저장';
+    btn.textContent = total > 1 ? `${total}일 전체 저장` : '저장';
   }
 }
 
