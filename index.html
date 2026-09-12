@@ -51,7 +51,13 @@ tr.flag{background:var(--warn-bg)}
 .recent-row b{margin-right:8px}
 .detail{display:block;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
 .set-line{padding:4px 0}
-#link-status{background:var(--s2);padding:8px 12px;border-radius:8px;font-size:13px;margin-top:10px}
+.best-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
+.best-tile{background:var(--s2);border-radius:10px;padding:10px 12px}
+.best-tile .l{font-size:11px;color:var(--mute)}
+.best-tile .v{font-family:ui-monospace,monospace;font-size:19px;font-weight:600;margin:2px 0}
+.best-tile .d{font-size:11px;color:var(--mute)}
+#trend-chart svg{width:100%;height:auto;display:block}
+#trend-chart .empty{color:var(--mute);font-size:13px;padding:20px 0;text-align:center}
 </style>
 </head>
 <body>
@@ -85,6 +91,17 @@ tr.flag{background:var(--warn-bg)}
     <div class="row" style="justify-content:space-between;margin-bottom:12px">
       <span class="small muted">로그인: <b id="whoami" style="color:var(--ink)"></b></span>
       <button class="ghost sm" id="logout">로그아웃</button>
+    </div>
+
+    <div class="card">
+      <h2>베스트 기록</h2>
+      <div id="bests"><p class="small muted">불러오는 중…</p></div>
+    </div>
+
+    <div class="card">
+      <h2>기록 추이</h2>
+      <select id="trend-pick" style="width:100%;margin-bottom:10px"></select>
+      <div id="trend-chart"></div>
     </div>
 
     <div class="card">

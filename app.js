@@ -33,6 +33,7 @@ async function refreshAuthUI() {
   if (session) {
     $('#whoami').textContent = session.user.email;
     loadRecent();
+    loadBests();
   }
 }
 sb.auth.onAuthStateChange((_evt, s) => { session = s; refreshAuthUI(); });
@@ -284,6 +285,7 @@ async function saveDraft() {
     $('#raw-text').value = '';
     renderDraft();
     loadRecent();
+    loadBests();
   } catch (err) {
     toast('저장 실패: ' + err.message);
   } finally {
@@ -321,6 +323,79 @@ async function toggleDetail(btn) {
     detail.dataset.loaded = '1';
   }
   detail.hidden = false;
+}
+
+// ── 베스트 기록 · 기록 추이 ──
+const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+let bestCombos = []; // [{stroke, distance, best_time_sec, best_date}]
+
+async function loadBests() {
+  const box = $('#bests');
+  const { data, error } = await sb.from('personal_bests').select('*').order('stroke').order('distance');
+  if (error) { box.innerHTML = `<div class="warn">불러오기 실패: ${esc(error.message)}</div>`; return; }
+  bestCombos = data || [];
+  if (!bestCombos.length) {
+    box.innerHTML = '<p class="small muted">기록을 저장하면 종목별 베스트가 여기 모입니다.</p>';
+    $('#trend-pick').innerHTML = '';
+    $('#trend-chart').innerHTML = '<div class="empty">기록이 쌓이면 그래프가 생깁니다</div>';
+    return;
+  }
+  box.innerHTML = `<div class="best-grid">${bestCombos.map((b) => `<div class="best-tile">
+      <div class="l">${P.STROKE_LABEL[b.stroke] || b.stroke} ${b.distance}m</div>
+      <div class="v">${P.fmtSec(b.best_time_sec)}</div>
+      <div class="d">${b.best_date}</div>
+    </div>`).join('')}</div>`;
+
+  const pick = $('#trend-pick');
+  const prev = pick.value;
+  pick.innerHTML = bestCombos.map((b) => `<option value="${b.stroke}|${b.distance}">${P.STROKE_LABEL[b.stroke] || b.stroke} ${b.distance}m</option>`).join('');
+  pick.value = bestCombos.some((b) => `${b.stroke}|${b.distance}` === prev) ? prev : pick.options[0].value;
+  loadTrend();
+}
+$('#trend-pick').addEventListener('change', loadTrend);
+
+async function loadTrend() {
+  const val = $('#trend-pick').value;
+  const chart = $('#trend-chart');
+  if (!val) { chart.innerHTML = ''; return; }
+  const [stroke, distance] = [val.split('|')[0], +val.split('|')[1]];
+  chart.innerHTML = '<p class="small muted">불러오는 중…</p>';
+  const { data, error } = await sb.from('laps')
+    .select('time_sec, sets!inner(stroke, distance, sessions!inner(session_date))')
+    .eq('sets.stroke', stroke).eq('sets.distance', distance)
+    .eq('is_missing', false).not('time_sec', 'is', null);
+  if (error) { chart.innerHTML = `<div class="warn">${esc(error.message)}</div>`; return; }
+  const points = data
+    .map((r) => ({ date: r.sets.sessions.session_date, y: r.time_sec }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  drawTrendChart(chart, points);
+}
+
+// 얇은 선 + 마지막 값 라벨의 심플한 추이 차트 (기록은 낮을수록 좋으므로 y축 최댓값이 위)
+function drawTrendChart(box, points) {
+  if (!points.length) { box.innerHTML = '<div class="empty">아직 기록이 없습니다</div>'; return; }
+  const W = 640, H = 180, L = 44, R = 16, T = 14, B = 22;
+  const ys = points.map((p) => p.y);
+  let y0 = Math.min(...ys), y1 = Math.max(...ys);
+  if (y0 === y1) { y0 -= 1; y1 += 1; }
+  const pad = (y1 - y0) * 0.1;
+  y0 -= pad; y1 += pad;
+  const X = (i) => (points.length === 1 ? (W - L - R) / 2 + L : L + (i / (points.length - 1)) * (W - L - R));
+  const Y = (v) => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
+  const pts = points.map((p, i) => ({ ...p, px: X(i), py: Y(p.y) }));
+  const line = pts.map((p, i) => `${i ? 'L' : 'M'}${p.px.toFixed(1)},${p.py.toFixed(1)}`).join('');
+  const gridC = cssVar('--line'), mutedC = cssVar('--mute'), lineC = cssVar('--acc'), surfC = cssVar('--s1'), inkC = cssVar('--ink');
+  const last = pts[pts.length - 1];
+  const ticks = [y0 + pad, (y0 + y1) / 2, y1 - pad];
+  box.innerHTML = `<svg viewBox="0 0 ${W} ${H}">
+    ${ticks.map((v) => `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="${gridC}" stroke-width="1"/>
+      <text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end" font-size="11" fill="${mutedC}">${P.fmtSec(v)}</text>`).join('')}
+    <path d="${line}" fill="none" stroke="${lineC}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    ${pts.map((p) => `<circle cx="${p.px}" cy="${p.py}" r="3.5" fill="${lineC}" stroke="${surfC}" stroke-width="1.5"><title>${p.date} · ${P.fmtSec(p.y)}</title></circle>`).join('')}
+    <text x="${last.px}" y="${last.py - 9}" text-anchor="middle" font-size="13" font-weight="600" fill="${inkC}">${P.fmtSec(last.y)}</text>
+    <text x="${L}" y="${H - 5}" font-size="11" fill="${mutedC}">${points[0].date}</text>
+    ${points.length > 1 ? `<text x="${W - R}" y="${H - 5}" text-anchor="end" font-size="11" fill="${mutedC}">${points[points.length - 1].date}</text>` : ''}
+  </svg>`;
 }
 
 refreshAuthUI();
