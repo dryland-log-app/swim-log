@@ -24,6 +24,17 @@ const STROKE_MAP = {
 };
 const STROKE_LABEL = { free: '자유형', fly: '접영', back: '배영', breast: '평영', im: 'IM', mixed: '혼합', unknown: '미지정' };
 
+// .md 파일로 붙여넣을 때를 위해 마크다운 문법을 미리 벗겨낸다.
+// "## 2026-09-12", "**50m x8**" 처럼 앞뒤에 #, ** 가 붙어 있으면 날짜/세트 헤더 인식이
+// 전부 실패하기 때문에, 실제 파싱 전에 반드시 이 전처리를 거친다.
+function normalizeLine(line) {
+  if (/^[-*_]{3,}\s*$/.test(line.trim())) return ''; // --- 구분선은 빈 줄로 취급
+  return line.replace(/^#{1,6}\s*/, '').replace(/\*\*/g, '').replace(/^>\s*/, '');
+}
+function normalizeText(raw) {
+  return raw.split('\n').map(normalizeLine).join('\n');
+}
+
 function findStroke(text) {
   for (const [kr, en] of Object.entries(STROKE_MAP)) {
     if (new RegExp(`(^|\\s)${kr}(\\s|$)`).test(text)) return en;
@@ -225,7 +236,7 @@ function explodeLabelSegments(line) {
  * rawText: 세트 하나 분량의 텍스트
  */
 function parseSwimBlock(rawText) {
-  const lines = rawText.split('\n').map((l) => l.trim()).filter(Boolean);
+  const lines = normalizeText(rawText).split('\n').map((l) => l.trim()).filter(Boolean);
   let header = null;
   const lapLines = [];
   for (const line of lines) {
@@ -292,7 +303,7 @@ function sniffPool(text) {
 }
 
 function splitSwimText(raw) {
-  const lines = raw.split('\n');
+  const lines = normalizeText(raw).split('\n');
   let meta = null, start = 0;
   for (let i = 0; i < lines.length; i++) {
     const t = lines[i].trim();
@@ -350,7 +361,7 @@ function parseDayHeader(line, refDate) {
   return null;
 }
 function splitSwimLog(fullText) {
-  const lines = fullText.split('\n');
+  const lines = normalizeText(fullText).split('\n');
   const starts = [];
   lines.forEach((l, i) => { if (parseDayHeader(l)) starts.push(i); });
   const days = [];
