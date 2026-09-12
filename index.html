@@ -51,10 +51,25 @@ table.laps th{text-align:left;color:var(--mute);font-weight:500;font-size:11px;p
 table.laps td{padding:3px 4px}
 table.laps input,table.laps select{padding:6px 7px;font-size:13px}
 tr.flag{background:var(--warn-bg)}
-.recent-row{display:block;width:100%;text-align:left;background:var(--s1);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px}
-.recent-row b{margin-right:8px}
-.detail{display:block;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
-.set-line{padding:4px 0}
+.recent-row{background:var(--s1);border:1px solid var(--line);border-radius:10px;margin-bottom:8px;overflow:hidden}
+.recent-head{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:12px}
+.recent-head b{white-space:nowrap}
+.recent-head .muted{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.recent-head .chev{color:var(--mute);transition:transform .15s}
+.recent-head.open .chev{transform:rotate(180deg)}
+.recent-row .detail{padding:0 12px 12px;border-top:1px solid var(--line)}
+.recent-row .detail>.row:first-child{margin-top:12px}
+
+.set-groups{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.set-group{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.set-group-head{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:10px 12px;background:var(--s2)}
+.set-group-head .chev{color:var(--mute);transition:transform .15s;flex:none}
+.set-group-head.open .chev{transform:rotate(180deg)}
+.split-hd,.split-row{display:grid;grid-template-columns:28px 72px 64px 1fr;gap:8px;padding:6px 12px;align-items:center}
+.split-hd{font-size:11px;color:var(--mute);padding-top:8px}
+.split-row{font-size:13px;border-top:1px solid var(--line)}
+.split-row.flag{background:var(--warn-bg)}
+.split-row .num{font-family:ui-monospace,monospace}
 .best-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
 .best-tile{background:var(--s2);border-radius:10px;padding:10px 12px}
 .best-tile .l{font-size:11px;color:var(--mute)}

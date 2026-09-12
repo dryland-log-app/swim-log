@@ -208,7 +208,7 @@ function blockHtml(b) {
 function lapRow(l, i) {
   return `<tr class="${l.needsReview ? 'flag' : ''}" data-i="${i}">
     <td>${l.repNo}</td>
-    <td><input data-f="timeRaw" value="${esc(l.timeRaw)}" placeholder="1'06.89" style="width:78px"></td>
+    <td><input data-f="timeRaw" value="${esc(l.timeRaw)}" placeholder="예: 1'06.89" style="width:78px"></td>
     <td><input data-f="restRaw" value="${esc(l.restRaw)}" placeholder="45초" style="width:64px"></td>
     <td><select data-f="strokeOverride"><option value="">(세트 영법)</option>${STROKES.slice(1).map(([v, lb]) => `<option value="${v}"${l.strokeOverride === v ? ' selected' : ''}>${lb}</option>`).join('')}</select></td>
     <td><input data-f="note" value="${esc(l.note)}" placeholder="메모" style="width:110px"></td>
@@ -323,35 +323,198 @@ async function saveAllDrafts() {
   }
 }
 
-// ── 최근 기록 ──
+// ── 최근 기록 (펼치면 검수 화면과 같은 표로 편집·저장·삭제까지 가능) ──
 async function loadRecent() {
   const box = $('#recent');
   box.innerHTML = '<div class="muted small">불러오는 중…</div>';
   const { data, error } = await sb.from('sessions').select('id, session_date, weekday, location, pool_length').order('session_date', { ascending: false }).limit(15);
   if (error) { box.innerHTML = `<div class="warn">불러오기 실패: ${esc(error.message)}</div>`; return; }
   if (!data.length) { box.innerHTML = '<div class="muted small">아직 저장된 기록이 없습니다.</div>'; return; }
-  box.innerHTML = data.map((s) => `<button class="recent-row" data-id="${s.id}">
-      <b>${s.session_date}${s.weekday ? `(${s.weekday})` : ''}</b>
-      <span class="muted">${esc(s.location || '')} · ${s.pool_length}m</span>
-      <span class="detail" hidden></span>
-    </button>`).join('');
-  $$('.recent-row', box).forEach((btn) => {
-    btn.addEventListener('click', () => toggleDetail(btn));
+  // 버튼 안에 편집용 입력칸까지 넣으면 브라우저가 클릭을 제대로 못 받아 접기/펴기가 꼬입니다.
+  // 그래서 "누르는 줄"과 "펼쳐지는 내용"을 서로 다른 요소로 분리합니다.
+  box.innerHTML = data.map((s) => `<div class="recent-row">
+      <button class="recent-head" data-id="${s.id}">
+        <b>${s.session_date}${s.weekday ? `(${s.weekday})` : ''}</b>
+        <span class="muted">${esc(s.location || '')} · ${s.pool_length}m</span>
+        <span class="chev">▾</span>
+      </button>
+      <div class="detail" hidden></div>
+    </div>`).join('');
+  $$('.recent-row', box).forEach((row) => {
+    row.querySelector('.recent-head').addEventListener('click', () => toggleDetail(row));
   });
 }
-async function toggleDetail(btn) {
-  const detail = btn.querySelector('.detail');
-  if (!detail.hidden) { detail.hidden = true; return; }
-  if (!detail.dataset.loaded) {
-    const { data, error } = await sb.from('sets').select('*, laps(*)').eq('session_id', btn.dataset.id).order('order_index');
-    if (error) { detail.textContent = '불러오기 실패: ' + error.message; }
-    else {
-      detail.innerHTML = data.map((s) => `<div class="set-line"><b>${s.raw_header || `${s.distance}m x${s.rep_count}`}</b> · ${P.STROKE_LABEL[s.stroke] || s.stroke}
-        <div class="small muted">${s.laps.sort((a, b) => a.rep_no - b.rep_no).map((l) => (l.time_sec != null ? P.fmtSec(l.time_sec) : (l.is_missing ? '누락' : '?'))).join(' · ')}</div></div>`).join('') || '<div class="small muted">세트 없음</div>';
+async function toggleDetail(row) {
+  const head = row.querySelector('.recent-head');
+  const detail = row.querySelector('.detail');
+  const wasOpen = !detail.hidden;
+  detail.hidden = wasOpen;
+  head.classList.toggle('open', !wasOpen);
+  if (wasOpen || detail.dataset.loaded) return;
+  detail.dataset.loaded = '1';
+  detail.innerHTML = '<p class="small muted">불러오는 중…</p>';
+  const id = head.dataset.id;
+  const [sessRes, setsRes] = await Promise.all([
+    sb.from('sessions').select('*').eq('id', id).single(),
+    sb.from('sets').select('*, laps(*)').eq('session_id', id).order('order_index'),
+  ]);
+  if (sessRes.error || setsRes.error) { detail.innerHTML = `<div class="warn">불러오기 실패: ${esc((sessRes.error || setsRes.error).message)}</div>`; return; }
+  setsRes.data.forEach((s) => s.laps.sort((a, b) => a.rep_no - b.rep_no));
+  const d = sessionToDraft(sessRes.data, setsRes.data);
+  showSessionView(detail, d);
+}
+
+// ── 보기 모드: 인터벌/스플릿/휴식을 표로, 세트별로 접었다 펼 수 있게 ──
+function showSessionView(container, d) {
+  container.innerHTML = sessionViewHtml(d);
+  wireSessionView(container, d);
+}
+function sessionViewHtml(d) {
+  return `
+    <div class="row" style="justify-content:space-between;align-items:flex-start;margin-top:12px">
+      <div class="small muted">${esc(d.location || '장소 미입력')} · ${d.poolLength}m 풀${d.condition ? `<br>${esc(d.condition)}` : ''}</div>
+      <button class="ghost sm" data-act="edit-session">편집</button>
+    </div>
+    <div class="set-groups">${d.blocks.map(setGroupHtml).join('') || '<p class="small muted">세트가 없습니다.</p>'}</div>`;
+}
+function setGroupTitle(b) {
+  return (b.distance && b.repCount) ? `${b.distance}m x${b.repCount}` : (b.rawHeader || '세트');
+}
+function setGroupHtml(b) {
+  const done = b.laps.filter((l) => l.timeRaw);
+  const secs = done.map((l) => P.toSeconds(l.timeRaw)).filter((v) => v != null);
+  const avg = secs.length ? secs.reduce((a, v) => a + v, 0) / secs.length : null;
+  return `<div class="set-group">
+    <button class="set-group-head">
+      <span class="grow"><b>${esc(setGroupTitle(b))}</b>${b.intervalRaw ? ` <span class="small muted">@${esc(b.intervalRaw)}</span>` : ''}</span>
+      <span class="small muted">${done.length}/${b.laps.length}${avg != null ? ` · 평균 ${P.fmtSec(Math.round(avg * 100) / 100)}` : ''}</span>
+      <span class="chev">▾</span>
+    </button>
+    <div class="set-group-body">
+      <div class="split-hd"><span>#</span><span>기록</span><span>휴식</span><span>영법 · 메모</span></div>
+      ${b.laps.map(splitRowHtml).join('')}
+    </div>
+  </div>`;
+}
+function splitRowHtml(l) {
+  const stroke = l.strokeOverride ? (P.STROKE_LABEL[l.strokeOverride] || l.strokeOverride) : '';
+  return `<div class="split-row ${l.needsReview ? 'flag' : ''}">
+    <span class="muted">${l.repNo}</span>
+    <span class="num">${l.timeRaw ? esc(l.timeRaw) : (l.isMissing ? '<span class="muted">누락</span>' : '<span class="muted">—</span>')}</span>
+    <span class="num muted">${l.restRaw ? esc(l.restRaw) : ''}</span>
+    <span class="small muted">${[stroke, l.note].filter(Boolean).map(esc).join(' · ')}</span>
+  </div>`;
+}
+function wireSessionView(container, d) {
+  container.querySelectorAll('.set-group-head').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const body = btn.nextElementSibling;
+      const open = body.hidden;
+      body.hidden = !open;
+      btn.classList.toggle('open', open);
+    });
+  });
+  container.querySelector('[data-act="edit-session"]').onclick = () => {
+    const original = JSON.parse(JSON.stringify(d)); // 취소하면 편집 중 바뀐 값을 되돌리기 위한 원본 복사본
+    container.innerHTML = sessionEditHtml(d);
+    wireSessionEdit(container, d, () => { Object.assign(d, original); showSessionView(container, d); });
+  };
+}
+
+// DB에서 읽은 세션+세트+랩을 붙여넣기 검수 화면과 같은 모양으로 바꿔서, 같은 블록/랩 렌더링 함수를 그대로 재사용합니다.
+function sessionToDraft(sess, sets) {
+  return {
+    id: sess.id, date: sess.session_date, location: sess.location || '', poolLength: sess.pool_length || 25, condition: sess.condition_note || '',
+    blocks: sets.map((s, i) => ({
+      id: s.id, key: 'e' + s.id,
+      setType: s.set_type, stroke: s.stroke, distance: s.distance, repCount: s.rep_count,
+      intervalRaw: s.interval_or_pace_sec != null ? P.fmtSec(s.interval_or_pace_sec) : '',
+      rawHeader: s.raw_header || `${s.distance ?? '?'}m x${s.rep_count ?? '?'}`,
+      laps: s.laps.map((l) => ({
+        repNo: l.rep_no,
+        timeRaw: l.time_sec != null ? P.fmtSec(l.time_sec) : '',
+        restRaw: l.rest_sec != null ? P.fmtSec(l.rest_sec) : '',
+        strokeOverride: l.stroke_override || '', strokeCount: l.stroke_count,
+        isMissing: l.is_missing, needsReview: l.needs_review, note: l.note || '',
+      })),
+    })),
+  };
+}
+function sessionEditHtml(d) {
+  return `
+    <div class="row">
+      <label>날짜<input data-ef="date" type="date" value="${d.date}"></label>
+      <label>장소<input data-ef="location" value="${esc(d.location)}"></label>
+      <label>풀 길이<select data-ef="poolLength"><option value="25"${d.poolLength == 25 ? ' selected' : ''}>25m</option><option value="50"${d.poolLength == 50 ? ' selected' : ''}>50m</option></select></label>
+    </div>
+    <label class="block">컨디션/메모<textarea data-ef="condition" rows="2">${esc(d.condition)}</textarea></label>
+    <div class="blocks">${d.blocks.map(blockHtml).join('') || '<p class="small muted">세트가 없습니다.</p>'}</div>
+    <div class="row end">
+      <button class="ghost sm" data-act="cancel-edit">취소</button>
+      <button class="ghost sm" data-act="delete-session">이 기록 삭제</button>
+      <button class="primary sm" data-act="save-session">수정 내용 저장</button>
+    </div>`;
+}
+function wireSessionEdit(container, d, onCancel) {
+  container.querySelectorAll('[data-ef]').forEach((input) => {
+    const f = input.dataset.ef;
+    const ev = input.tagName === 'SELECT' ? 'change' : 'input';
+    input.addEventListener(ev, () => (d[f] = f === 'poolLength' ? +input.value : input.value));
+  });
+  d.blocks.forEach((b) => wireBlock(b));
+  container.querySelector('[data-act="save-session"]').onclick = () => saveSessionEdit(d, container);
+  container.querySelector('[data-act="delete-session"]').onclick = () => deleteSession(d);
+  if (onCancel) container.querySelector('[data-act="cancel-edit"]').onclick = onCancel;
+}
+async function saveSessionEdit(d, container) {
+  const btn = container.querySelector('[data-act="save-session"]');
+  btn.disabled = true;
+  btn.textContent = '저장 중…';
+  try {
+    const [yy, mm, dd] = d.date.split('-').map(Number);
+    const weekday = ['일', '월', '화', '수', '목', '금', '토'][new Date(yy, mm - 1, dd).getDay()];
+    const { error: e1 } = await sb.from('sessions').update({
+      session_date: d.date, weekday, location: d.location || null, pool_length: d.poolLength, condition_note: d.condition || null,
+    }).eq('id', d.id);
+    if (e1) throw e1;
+    for (const b of d.blocks) {
+      const intervalSec = b.intervalRaw ? P.toSeconds(b.intervalRaw) : null;
+      const { error: e2 } = await sb.from('sets').update({
+        set_type: b.setType, stroke: b.stroke, distance: b.distance, rep_count: b.repCount,
+        interval_mode: intervalSec ? 'fixed_interval' : 'none', interval_or_pace_sec: intervalSec,
+      }).eq('id', b.id);
+      if (e2) throw e2;
+      // 랩은 통째로 바뀔 수 있어 (추가/삭제) 지우고 새로 넣는 방식으로 저장합니다.
+      const { error: eDel } = await sb.from('laps').delete().eq('set_id', b.id);
+      if (eDel) throw eDel;
+      const lapRows = b.laps.map((l) => ({
+        set_id: b.id, rep_no: l.repNo,
+        time_sec: l.timeRaw ? P.toSeconds(l.timeRaw) : null,
+        rest_sec: l.restRaw ? P.toSeconds(l.restRaw) : null,
+        stroke_override: l.strokeOverride || null, stroke_count: l.strokeCount || null,
+        is_missing: !!l.isMissing, needs_review: !!l.needsReview, note: l.note || null,
+      }));
+      if (lapRows.length) {
+        const { error: e3 } = await sb.from('laps').insert(lapRows);
+        if (e3) throw e3;
+      }
     }
-    detail.dataset.loaded = '1';
+    toast('수정했습니다');
+    loadRecent();
+    loadBests();
+  } catch (err) {
+    toast('저장 실패: ' + err.message);
+    btn.disabled = false;
+    btn.textContent = '수정 내용 저장';
   }
-  detail.hidden = false;
+}
+async function deleteSession(d) {
+  if (!confirm('이 기록을 완전히 삭제할까요? 되돌릴 수 없습니다.')) return;
+  const { error } = await sb.from('sessions').delete().eq('id', d.id);
+  if (error) return toast('삭제 실패: ' + error.message);
+  toast('삭제했습니다');
+  loadRecent();
+  loadBests();
 }
 
 // ── 베스트 기록 · 기록 추이 ──
