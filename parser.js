@@ -88,6 +88,10 @@ function parseSetHeader(line) {
 // "Set 1 — 100m 스트로크 카운트" 처럼 반복 횟수 표기가 없는 세트 제목
 function parseNamedHeader(line) {
   if (parseSetHeader(line)) return null;
+  // "Set1: 13.18 / 13.60 / ..." 처럼 콜론 뒤에 바로 기록이 오는 줄은 세트 제목이 아니라
+  // 라벨 붙은 랩 데이터 줄이다 (explodeLabelSegments가 처리). 세트 제목이라면 "Set 1 — 설명"처럼
+  // 콜론 뒤가 숫자로 바로 시작하지 않는다.
+  if (/^Set\s*\d+\s*:\s*\d/i.test(line)) return null;
   const m = line.match(/^Set\s*\d+\b.*$/i);
   if (!m) return null;
   return { distance: null, repCount: null, intervalRaw: null, intervalSec: null, stroke: findStroke(line), rawHeader: line };
@@ -259,8 +263,30 @@ function parseSwimBlock(rawText) {
     if (h && !header) { header = h; continue; }
     lapLines.push(line);
   }
+  // 제목 줄이 아예 없는 날(예: "자유형25m: 12.04 / 12.18 / 12.24")도 랩 줄 안에
+  // "종목+거리" 표기가 일관되게 있으면 그걸로 거리를 채운다. 거리가 여러 개 섞여
+  // 있으면(예: 자유형50m와 자유형100m이 한 블록에 같이 있는 경우) 자동으로 정할 수
+  // 없으니 손대지 않고 그대로 검수 화면에서 채우게 둔다.
+  if (!header) {
+    const sniffed = sniffBlockMeta(lapLines);
+    if (sniffed) header = { distance: sniffed.distance, repCount: null, intervalRaw: null, intervalSec: null, stroke: sniffed.stroke, rawHeader: null };
+  }
   const laps = lapLinesToLaps(lapLines);
   return { header, laps };
+}
+
+function sniffBlockMeta(lapLines) {
+  const found = [];
+  for (const line of lapLines) {
+    const re = /([가-힣]{1,3})\s*(\d{2,3})m\b/g;
+    let m;
+    while ((m = re.exec(line))) found.push({ stroke: STROKE_MAP[m[1]] || null, distance: parseInt(m[2]) });
+  }
+  if (!found.length) return null;
+  const distances = new Set(found.map((f) => f.distance));
+  if (distances.size !== 1) return null;
+  const strokes = new Set(found.filter((f) => f.stroke).map((f) => f.stroke));
+  return { distance: [...distances][0], stroke: strokes.size === 1 ? [...strokes][0] : null };
 }
 
 // 한 세트에 속하는 원본 줄들 -> 랩 배열. 라벨 분리 → 화살표 개수 확인 → 슬래시 분리 순으로 처리.
