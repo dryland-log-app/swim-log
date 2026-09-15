@@ -492,18 +492,24 @@ function personalBests() {
   }
   return Object.values(map).sort((a, b) => a.stroke.localeCompare(b.stroke) || a.distance - b.distance);
 }
+// 하루에 같은 종목/거리 랩이 여러 개 있으면(한 세트에 8개씩 등) 전부 점으로 찍지 않고
+// 그날의 가장 빠른 기록 하나만 찍습니다. 추이 그래프는 "날짜별 실력 변화"를 보는 용도라,
+// 한 세트 안의 랩 편차까지 다 보여주면 같은 날짜가 여러 번 겹쳐 찍혀 오히려 읽기 어려워집니다
+// (세트 안 편차는 "최근 기록"에서 랩 단위로 이미 볼 수 있습니다).
 function trendPoints(stroke, distance) {
-  const pts = [];
+  const bestByDate = {};
   for (const s of S.sessions) {
     for (const b of s.blocks) {
       if (b.stroke !== stroke || b.distance !== distance) continue;
       for (const l of b.laps) {
         if (l.isMissing || !l.timeRaw) continue;
         const t = P.toSeconds(l.timeRaw);
-        if (t != null) pts.push({ date: s.date, y: t });
+        if (t == null) continue;
+        if (!(s.date in bestByDate) || t < bestByDate[s.date]) bestByDate[s.date] = t;
       }
     }
   }
+  const pts = Object.entries(bestByDate).map(([date, y]) => ({ date, y }));
   return pts.sort((a, b) => a.date.localeCompare(b.date));
 }
 
