@@ -38,6 +38,8 @@ async function refreshAuthUI() {
 }
 sb.auth.onAuthStateChange((_evt, s) => { session = s; refreshAuthUI(); });
 
+// 매직 링크 로그인. Supabase 쪽 Authentication → URL Configuration의 Site URL이
+// 실제 배포 주소로 맞춰져 있어야 메일의 링크가 정상적으로 열립니다.
 let pendingEmail = '';
 async function sendCode() {
   const email = $('#email').value.trim();
@@ -45,34 +47,17 @@ async function sendCode() {
   const btn = $('#send-code');
   btn.disabled = true;
   btn.textContent = '보내는 중…';
-  const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
+  const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true, emailRedirectTo: location.href } });
   btn.disabled = false;
-  btn.textContent = '코드 받기';
+  btn.textContent = '로그인 링크 보내기';
   if (error) return toast('전송 실패: ' + error.message);
   pendingEmail = email;
   $('#code-sent-to').textContent = email;
   $('#step-email').hidden = true;
   $('#step-code').hidden = false;
-  $('#code').value = '';
-  $('#code').focus();
 }
 $('#send-code').addEventListener('click', sendCode);
 $('#email').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendCode(); });
-
-$('#verify-code').addEventListener('click', async () => {
-  const code = $('#code').value.trim();
-  if (!/^\d{6}$/.test(code)) return toast('6자리 숫자를 입력해 주세요');
-  const btn = $('#verify-code');
-  btn.disabled = true;
-  btn.textContent = '확인 중…';
-  const { error } = await sb.auth.verifyOtp({ email: pendingEmail, token: code, type: 'email' });
-  btn.disabled = false;
-  btn.textContent = '로그인';
-  if (error) return toast('코드가 맞지 않거나 만료됐습니다: ' + error.message);
-  $('#step-email').hidden = false;
-  $('#step-code').hidden = true;
-});
-$('#code').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#verify-code').click(); });
 $('#resend-code').addEventListener('click', sendCode);
 $('#change-email').addEventListener('click', () => { $('#step-email').hidden = false; $('#step-code').hidden = true; });
 
