@@ -75,9 +75,10 @@ function dayToDraft(day, di) {
   };
 }
 
+// 영법이 어디에도 안 적혀 있으면 자유형으로 봅니다 (수영에서 가장 흔한 기본 종목이라).
 function guessStroke(laps) {
   const s = new Set(laps.map((l) => l.strokeOverride).filter(Boolean));
-  if (s.size === 0) return 'unknown';
+  if (s.size === 0) return 'free';
   if (s.size === 1) return [...s][0];
   return 'mixed';
 }
@@ -86,7 +87,7 @@ function blockToDraft(b, i) {
   return {
     key: 'b' + i, // 날짜 인덱스까지 포함된 값이라 여러 날짜를 한 화면에 그려도 서로 안 겹칩니다
     setType: 'main',
-    stroke: guessStroke(b.laps),
+    stroke: h.stroke || guessStroke(b.laps),
     distance: h.distance ?? null,
     repCount: h.repCount ?? b.laps.length,
     intervalRaw: h.intervalRaw || '',
@@ -217,15 +218,22 @@ function renderBlockLaps(b) {
 }
 
 // ── 저장 (이 브라우저의 저장소에 넣기) ──
+// 같은 날짜를 다시 저장하면 새로 쌓이지 않고, 그 날짜의 기존 기록을 지우고 새 것으로 바꿉니다
+// (같은 글을 두 번 붙여넣거나, 하루치를 고쳐서 다시 저장하는 경우를 위함).
 function saveOneDay(day) {
+  const dup = S.sessions.filter((s) => s.date === day.date).length;
+  S.sessions = S.sessions.filter((s) => s.date !== day.date);
   S.sessions.push({ id: uid(), ...day });
+  return dup; // 덮어쓴 기존 기록 개수 (안내 문구용)
 }
 function saveAllDrafts() {
   if (!draftDays || !draftDays.length) return;
   const total = draftDays.length;
-  for (const day of draftDays) saveOneDay(day);
+  let replaced = 0;
+  for (const day of draftDays) replaced += saveOneDay(day);
   saveStore();
-  toast(total > 1 ? `${total}일 전체 저장했습니다` : '저장했습니다');
+  const msg = total > 1 ? `${total}일 전체 저장했습니다` : '저장했습니다';
+  toast(replaced ? `${msg} (같은 날짜 ${replaced}개는 새 내용으로 덮어썼습니다)` : msg);
   draftDays = null;
   $('#raw-text').value = '';
   renderDraft();
