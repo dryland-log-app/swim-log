@@ -562,7 +562,7 @@ function drawTrendChart(box, points) {
     <text x="${last.px}" y="${last.py - 9}" text-anchor="middle" font-size="13" font-weight="600" fill="${inkC}">${P.fmtSec(last.y)}</text>
     <text x="${L}" y="${H - 5}" font-size="11" fill="${mutedC}">${points[0].date}</text>
     ${points.length > 1 ? `<text x="${W - R}" y="${H - 5}" text-anchor="end" font-size="11" fill="${mutedC}">${points[points.length - 1].date}</text>` : ''}
-    ${pts.map((p, i) => `<circle cx="${p.px}" cy="${p.py}" r="10" fill="transparent" data-i="${i}" class="hit"/>`).join('')}
+    ${pts.map((p, i) => `<circle cx="${p.px}" cy="${p.py}" r="10" fill="transparent" pointer-events="all" data-i="${i}" class="hit"/>`).join('')}
     </svg>
     <div class="chart-tip" hidden></div>
   </div>`;

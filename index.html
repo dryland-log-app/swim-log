@@ -4,33 +4,40 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Swim Log</title>
-<meta name="theme-color" content="#F7F8FA">
+<meta name="theme-color" content="#F3F8FA">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <style>
 :root{
   color-scheme: light dark;
-  --bg:#F7F8FA; --s1:#FFFFFF; --s2:#EEF1F4; --line:#E2E6EA;
-  --ink:#16212B; --ink2:#57646F; --mute:#8B96A1;
-  --acc:#1C86C9; --acc-ink:#FFFFFF; --warn-bg:#FEF6E6; --warn-ink:#8A5A00; --danger:#C23B32;
-  --sans:system-ui,-apple-system,"Noto Sans KR",sans-serif;
+  --bg:#F3F8FA; --s1:#FFFFFF; --s2:#E9F1F5; --line:#DCE6EC;
+  --ink:#0F2430; --ink2:#4C6472; --mute:#83A0AB;
+  --acc:#0A84B5; --acc-ink:#FFFFFF; --gold:#B9860B; --gold-ink:#5A3E00; --gold-bg:#FBF1DA;
+  --warn-bg:#FDF3E0; --warn-ink:#8A5A00; --danger:#C23B32;
+  --sans:"IBM Plex Sans KR",system-ui,-apple-system,"Noto Sans KR",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",monospace;
+  --radius:14px;
 }
 @media (prefers-color-scheme: dark){
   :root{
-    --bg:#0B1216; --s1:#131D23; --s2:#1A272E; --line:#22313A;
-    --ink:#E6EEF1; --ink2:#A9BAC2; --mute:#6F848E;
-    --acc:#3BB4E6; --acc-ink:#04202C; --warn-bg:#2B2410; --warn-ink:#F2B544; --danger:#FF8A80;
+    --bg:#081418; --s1:#0F1E24; --s2:#16262D; --line:#1F323B;
+    --ink:#E5F1F5; --ink2:#9FB7C0; --mute:#61818C;
+    --acc:#3EC1EA; --acc-ink:#03222E; --gold:#E8B23D; --gold-ink:#3A2900; --gold-bg:#2A2109;
+    --warn-bg:#2B2410; --warn-ink:#F2B544; --danger:#FF8A80;
   }
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5;padding-bottom:60px}
 .wrap{max-width:720px;margin:0 auto;padding:20px 16px}
-h1{font-size:22px;margin:0 0 4px}
-h2{font-size:17px;margin:0 0 10px}
+h1{font-size:24px;font-weight:700;letter-spacing:-.01em;margin:0 0 4px}
+h2{font-size:15px;font-weight:700;letter-spacing:-.005em;margin:0 0 10px;color:var(--ink)}
 .muted{color:var(--mute)} .small{font-size:13px}
-.card{background:var(--s1);border-radius:14px;padding:16px;margin-bottom:16px;border:1px solid var(--line)}
+.card{background:var(--s1);border-radius:var(--radius);padding:16px;margin-bottom:16px;border:1px solid var(--line)}
 label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--ink2)}
 label.block{display:flex;margin-top:10px}
 input,textarea,select{font:inherit;color:var(--ink);background:var(--s2);border:1px solid var(--line);border-radius:8px;padding:9px 10px}
-textarea{resize:vertical;min-height:70px;font-family:ui-monospace,monospace;font-size:13px}
+textarea{resize:vertical;min-height:70px;font-family:var(--mono);font-size:13px}
 button{font:inherit;cursor:pointer;border:0;border-radius:9px;padding:10px 16px;background:var(--s2);color:var(--ink)}
 button.primary{background:var(--acc);color:var(--acc-ink);font-weight:600}
 button.ghost{background:transparent;border:1px solid var(--line)}
@@ -41,7 +48,7 @@ button:disabled{opacity:.5;cursor:default}
 .row:first-child{margin-top:0}
 #toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:13px;z-index:10}
 .warn{background:var(--warn-bg);color:var(--warn-ink);padding:8px 12px;border-radius:8px;font-size:13px;margin:0 0 12px}
-.banner{display:flex;align-items:center;gap:10px;background:var(--s2);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:16px}
+.banner{display:flex;align-items:center;gap:10px;background:var(--s2);border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:10px;padding:10px 14px;margin-bottom:16px}
 .banner .grow{flex:1}
 .day-card{border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:16px;background:var(--s2)}
 .day-card:last-child{margin-bottom:0}
@@ -49,13 +56,14 @@ button:disabled{opacity:.5;cursor:default}
 .set-block{border-top:1px solid var(--line);padding-top:14px;margin-top:14px}
 .set-block:first-child{border-top:0;padding-top:0;margin-top:0}
 table.laps{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px}
-table.laps th{text-align:left;color:var(--mute);font-weight:500;font-size:11px;padding:4px 4px}
+table.laps th{text-align:left;color:var(--mute);font-weight:600;font-size:11px;letter-spacing:.02em;padding:4px 4px}
 table.laps td{padding:3px 4px}
 table.laps input,table.laps select{padding:6px 7px;font-size:13px}
+table.laps input{font-family:var(--mono);font-variant-numeric:tabular-nums}
 tr.flag{background:var(--warn-bg)}
 .recent-row{background:var(--s1);border:1px solid var(--line);border-radius:10px;margin-bottom:8px;overflow:hidden}
 .recent-head{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:12px}
-.recent-head b{white-space:nowrap}
+.recent-head b{white-space:nowrap;font-family:var(--mono);font-variant-numeric:tabular-nums}
 .recent-head .muted{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .recent-head .chev{color:var(--mute);transition:transform .15s}
 .recent-head.open .chev{transform:rotate(180deg)}
@@ -67,27 +75,27 @@ tr.flag{background:var(--warn-bg)}
 .set-group-head{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:10px 12px;background:var(--s2)}
 .set-group-head .chev{color:var(--mute);transition:transform .15s;flex:none}
 .set-group-head.open .chev{transform:rotate(180deg)}
-.split-hd,.split-row{display:grid;grid-template-columns:16px 26px 66px 58px 52px 1fr;gap:8px;padding:6px 12px;align-items:center}
-.split-hd{font-size:11px;color:var(--mute);padding-top:8px}
+.split-hd,.split-row{display:grid;grid-template-columns:14px 20px 54px 44px 40px minmax(70px,1fr);gap:6px;padding:6px 8px;align-items:center}
+.split-hd{font-size:11px;color:var(--mute);font-weight:600;letter-spacing:.02em;padding-top:8px}
 .split-row{font-size:13px;border-top:1px solid var(--line)}
 .split-row.flag{background:var(--warn-bg)}
-.split-row .num{font-family:ui-monospace,monospace}
+.split-row .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
 .split-toggle{background:none;border:0;padding:0;color:var(--mute);cursor:pointer;font-size:11px;width:16px}
 .split-detail{padding:2px 12px 8px 54px;display:flex;flex-direction:column;gap:2px;border-top:1px dashed var(--line)}
 .split-detail[hidden]{display:none}
 .split-detail-row{display:flex;justify-content:space-between;max-width:220px;font-size:12px;color:var(--ink2)}
-.split-detail-row .num{font-family:ui-monospace,monospace}
+.split-detail-row .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
 .metric-toggle input{margin:0}
 .best-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
-.best-tile{background:var(--s2);border-radius:10px;padding:10px 12px}
-.best-tile .l{font-size:11px;color:var(--mute)}
-.best-tile .v{font-family:ui-monospace,monospace;font-size:19px;font-weight:600;margin:2px 0}
+.best-tile{background:var(--gold-bg);border-left:3px solid var(--gold);border-radius:10px;padding:10px 12px}
+.best-tile .l{font-size:11px;color:var(--gold-ink);font-weight:600;letter-spacing:.02em}
+.best-tile .v{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:20px;font-weight:600;margin:2px 0;color:var(--ink)}
 .best-tile .d{font-size:11px;color:var(--mute)}
-#trend-chart svg{width:100%;height:auto;display:block}
+#trend-chart svg{width:100%;height:auto;display:block;font-family:var(--mono)}
 #trend-chart .empty{color:var(--mute);font-size:13px;padding:20px 0;text-align:center}
 #trend-chart .chart-wrap{position:relative}
 #trend-chart circle.hit{cursor:pointer}
-#trend-chart .chart-tip{position:absolute;transform:translate(-50%,-135%);background:var(--ink);color:var(--bg);font-size:12px;padding:4px 9px;border-radius:6px;white-space:nowrap;pointer-events:none;box-shadow:0 2px 6px rgba(0,0,0,.2)}
+#trend-chart .chart-tip{position:absolute;transform:translate(-50%,-135%);background:var(--ink);color:var(--bg);font-family:var(--mono);font-size:12px;padding:4px 9px;border-radius:6px;white-space:nowrap;pointer-events:none;box-shadow:0 2px 6px rgba(0,0,0,.2)}
 </style>
 </head>
 <body>
