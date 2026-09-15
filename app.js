@@ -98,6 +98,9 @@ function blockToDraft(b, i) {
       restRaw: l.restSec != null ? P.fmtSec(l.restSec) : '',
       strokeOverride: l.strokeOverride || '',
       strokeCount: l.strokeCount,
+      // 워치/수동으로 구간(예: 50m 랩 안의 25m 턴 기록)을 나중에 채울 자리.
+      // 지금은 비어있고, 있으면 화면에서 펼쳐 볼 수 있습니다.
+      splits: l.splits || [],
       isMissing: l.isMissing,
       needsReview: l.needsReview,
       note: l.note || '',
@@ -142,7 +145,11 @@ function dayCardHtml(d, di) {
     ${flagged ? `<div class="small" style="color:var(--warn-ink)">확인 필요 ${flagged}개</div>` : ''}
     <label class="block">컨디션/메모<textarea data-df="condition" rows="2" placeholder="컨디션, 특이사항">${esc(d.condition)}</textarea></label>
     <div class="blocks">${d.blocks.map(blockHtml).join('')}</div>
+    <button class="ghost sm" data-act="add-set">+ 세트 추가</button>
   </div>`;
+}
+function emptyBlock() {
+  return { key: uid(), setType: 'main', stroke: 'free', distance: null, repCount: null, intervalRaw: '', rawHeader: '', laps: [] };
 }
 function wireDayCard(d, di) {
   const el = $(`.day-card[data-di="${di}"]`);
@@ -154,36 +161,72 @@ function wireDayCard(d, di) {
   });
   const removeBtn = el.querySelector('[data-act="remove-day"]');
   if (removeBtn) removeBtn.onclick = () => { draftDays.splice(di, 1); renderDraft(); };
-  d.blocks.forEach((b) => wireBlock(b));
+  renderBlocks(el, d, emptyBlock);
 }
 
 function blockHtml(b) {
   return `<div class="set-block" data-key="${b.key}">
-    <div class="row">
-      <label>종류<select data-f="setType">${SET_TYPES.map(([v, l]) => `<option value="${v}"${b.setType === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
-      <label>영법<select data-f="stroke">${STROKES.map(([v, l]) => `<option value="${v}"${b.stroke === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
-      <label>거리<input data-f="distance" type="number" value="${b.distance ?? ''}" style="width:70px"></label>
-      <label>계획 횟수<input data-f="repCount" type="number" value="${b.repCount ?? ''}" style="width:70px"></label>
-      <label>인터벌<input data-f="intervalRaw" value="${esc(b.intervalRaw)}" placeholder="1'40&quot;" style="width:80px"></label>
+    <div class="row" style="justify-content:space-between">
+      <div class="row" style="margin:0">
+        <label>종류<select data-f="setType">${SET_TYPES.map(([v, l]) => `<option value="${v}"${b.setType === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label>영법<select data-f="stroke">${STROKES.map(([v, l]) => `<option value="${v}"${b.stroke === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label>거리<input data-f="distance" type="number" value="${b.distance ?? ''}" style="width:70px"></label>
+        <label>계획 횟수<input data-f="repCount" type="number" value="${b.repCount ?? ''}" style="width:70px"></label>
+        <label>인터벌<input data-f="intervalRaw" value="${esc(b.intervalRaw)}" placeholder="1'40&quot;" style="width:80px"></label>
+      </div>
+      <button class="ghost sm" data-act="del-set" style="align-self:flex-end">세트 삭제</button>
     </div>
     <div class="small muted">원본: ${esc(b.rawHeader) || '(헤더 없음)'}</div>
+    <div style="overflow-x:auto">
     <table class="laps">
-      <thead><tr><th>#</th><th>기록</th><th>휴식</th><th>영법</th><th>메모</th><th>누락</th><th></th></tr></thead>
+      <thead><tr><th>#</th><th>기록</th><th>휴식</th><th>스트로크</th><th>영법</th><th>메모</th><th>누락</th><th></th><th></th></tr></thead>
       <tbody>${b.laps.map((l, i) => lapRow(l, i)).join('')}</tbody>
     </table>
+    </div>
     <button class="ghost sm" data-act="add-lap">+ 랩 추가</button>
   </div>`;
 }
+// 세트 목록 하나를 통째로 다시 그리고 다시 연결한다 (검수 화면·저장된 기록 편집 화면 둘 다 공용).
+// makeBlock()은 "+ 세트 추가"를 눌렀을 때 들어갈 빈 세트를 만드는 함수.
+function renderBlocks(container, d, makeBlock) {
+  const box = container.querySelector(':scope > .blocks, .blocks');
+  box.innerHTML = d.blocks.map(blockHtml).join('') || '<p class="small muted">세트가 없습니다.</p>';
+  d.blocks.forEach((b) => wireBlock(b));
+  box.querySelectorAll('[data-act="del-set"]').forEach((btn) => {
+    const key = btn.closest('.set-block').dataset.key;
+    btn.onclick = () => { d.blocks = d.blocks.filter((x) => x.key !== key); renderBlocks(container, d, makeBlock); };
+  });
+  const addBtn = container.querySelector('[data-act="add-set"]');
+  if (addBtn) addBtn.onclick = () => { d.blocks.push(makeBlock()); renderBlocks(container, d, makeBlock); };
+}
 function lapRow(l, i) {
+  const splits = l.splits || [];
   return `<tr class="${l.needsReview ? 'flag' : ''}" data-i="${i}">
     <td>${l.repNo}</td>
     <td><input data-f="timeRaw" value="${esc(l.timeRaw)}" placeholder="예: 1'06.89" style="width:78px"></td>
     <td><input data-f="restRaw" value="${esc(l.restRaw)}" placeholder="45초" style="width:64px"></td>
+    <td><input data-f="strokeCount" type="number" value="${l.strokeCount ?? ''}" placeholder="수" style="width:48px"></td>
     <td><select data-f="strokeOverride"><option value="">(세트 영법)</option>${STROKES.slice(1).map(([v, lb]) => `<option value="${v}"${l.strokeOverride === v ? ' selected' : ''}>${lb}</option>`).join('')}</select></td>
     <td><input data-f="note" value="${esc(l.note)}" placeholder="메모" style="width:110px"></td>
     <td><input data-f="isMissing" type="checkbox" ${l.isMissing ? 'checked' : ''}></td>
+    <td><button class="ghost sm" data-act="toggle-splits">구간${splits.length ? ` (${splits.length})` : ''}</button></td>
     <td><button class="ghost sm" data-act="del-lap">삭제</button></td>
+  </tr>
+  <tr class="splits-edit" data-splits-for="${i}"${splits.length ? '' : ' hidden'}>
+    <td colspan="9" style="padding:2px 4px 10px 24px">${splitsEditorHtml(splits)}</td>
   </tr>`;
+}
+// 랩 하나 안의 구간기록(예: 50m 랩의 25m 턴 기록) 편집용 미니 에디터.
+// 워치 연동 전까지는 손으로 채우는 자리이며, 비어 있어도 아무 문제 없습니다.
+function splitsEditorHtml(splits) {
+  return `<div class="row" style="margin:0;flex-wrap:wrap;gap:6px;align-items:center">
+    ${splits.map((sp, j) => `<span class="row" style="margin:0;gap:4px;align-items:center" data-sj="${j}">
+      <input data-sf="distance" type="number" value="${sp.distance ?? ''}" placeholder="25" style="width:50px">m
+      <input data-sf="timeRaw" value="${esc(sp.timeRaw)}" placeholder="15.20" style="width:70px">
+      <button class="ghost sm" data-act="del-split">×</button>
+    </span>`).join('')}
+    <button class="ghost sm" data-act="add-split">+ 구간 추가</button>
+  </div>`;
 }
 function wireBlock(b) {
   const el = $(`.set-block[data-key="${b.key}"]`);
@@ -194,20 +237,39 @@ function wireBlock(b) {
     input.addEventListener('input', () => (b[f] = input.type === 'number' ? (input.value === '' ? null : +input.value) : input.value));
     input.addEventListener('change', () => (b[f] = input.type === 'number' ? (input.value === '' ? null : +input.value) : input.value));
   });
-  el.querySelectorAll('tbody tr').forEach((tr) => {
+  el.querySelectorAll('tbody tr[data-i]').forEach((tr) => {
     const i = +tr.dataset.i, lap = b.laps[i];
     tr.querySelectorAll('[data-f]').forEach((input) => {
       const f = input.dataset.f;
       const ev = input.type === 'checkbox' ? 'change' : 'input';
       input.addEventListener(ev, () => {
-        lap[f] = input.type === 'checkbox' ? input.checked : input.value;
+        if (input.type === 'checkbox') lap[f] = input.checked;
+        else if (input.type === 'number') lap[f] = input.value === '' ? null : +input.value;
+        else lap[f] = input.value;
         if (f === 'timeRaw') { lap.needsReview = input.value.trim() !== '' && P.toSeconds(input.value.trim()) == null; tr.classList.toggle('flag', lap.needsReview); }
       });
     });
     tr.querySelector('[data-act="del-lap"]').onclick = () => { b.laps.splice(i, 1); b.laps.forEach((l, j) => (l.repNo = j + 1)); renderBlockLaps(b); };
+    tr.querySelector('[data-act="toggle-splits"]').onclick = () => {
+      const sRow = el.querySelector(`tr.splits-edit[data-splits-for="${i}"]`);
+      sRow.hidden = !sRow.hidden;
+    };
+  });
+  el.querySelectorAll('tr.splits-edit').forEach((srow) => {
+    const lap = b.laps[+srow.dataset.splitsFor];
+    if (!lap.splits) lap.splits = [];
+    srow.querySelectorAll('[data-sj]').forEach((span) => {
+      const sp = lap.splits[+span.dataset.sj];
+      span.querySelectorAll('[data-sf]').forEach((input) => {
+        const f = input.dataset.sf;
+        input.addEventListener('input', () => { sp[f] = input.type === 'number' ? (input.value === '' ? null : +input.value) : input.value; });
+      });
+      span.querySelector('[data-act="del-split"]').onclick = () => { lap.splits.splice(+span.dataset.sj, 1); renderBlockLaps(b); };
+    });
+    srow.querySelector('[data-act="add-split"]').onclick = () => { lap.splits.push({ distance: null, timeRaw: '' }); renderBlockLaps(b); };
   });
   el.querySelector('[data-act="add-lap"]').onclick = () => {
-    b.laps.push({ repNo: b.laps.length + 1, timeRaw: '', restRaw: '', strokeOverride: '', strokeCount: null, isMissing: false, needsReview: false, note: '', rawText: '' });
+    b.laps.push({ repNo: b.laps.length + 1, timeRaw: '', restRaw: '', strokeOverride: '', strokeCount: null, splits: [], isMissing: false, needsReview: false, note: '', rawText: '' });
     renderBlockLaps(b);
   };
 }
@@ -281,13 +343,20 @@ function showSessionView(container, d) {
   container.innerHTML = sessionViewHtml(d);
   wireSessionView(container, d);
 }
+// 스트로크수/DPS/스트로크레이트 중 어느 걸 표시할지 (심박수는 워치 종속적이라 제외).
+// 화면 표시 옵션일 뿐, 저장되는 값이 아니라 세션 하나 볼 때마다 초기화돼도 괜찮습니다.
+let metricMode = 'count';
+const METRIC_LABEL = { count: '스트로크', dps: 'DPS', rate: '레이트' };
 function sessionViewHtml(d) {
   return `
     <div class="row" style="justify-content:space-between;align-items:flex-start;margin-top:12px">
       <div class="small muted">${esc(d.location || '장소 미입력')} · ${d.poolLength}m 풀${d.condition ? `<br>${esc(d.condition)}` : ''}</div>
       <button class="ghost sm" data-act="edit-session">편집</button>
     </div>
-    <div class="set-groups">${d.blocks.map(setGroupHtml).join('') || '<p class="small muted">세트가 없습니다.</p>'}</div>`;
+    <div class="row small metric-toggle" style="margin:10px 0 0;gap:14px">
+      ${Object.entries(METRIC_LABEL).map(([v, l]) => `<label style="display:flex;flex-direction:row;align-items:center;gap:4px"><input type="radio" name="metric-mode-${d.id}" value="${v}"${metricMode === v ? ' checked' : ''}> ${l}</label>`).join('')}
+    </div>
+    <div class="set-groups">${d.blocks.map((b) => setGroupHtml(b)).join('') || '<p class="small muted">세트가 없습니다.</p>'}</div>`;
 }
 function setGroupTitle(b) {
   return (b.distance && b.repCount) ? `${b.distance}m x${b.repCount}` : (b.rawHeader || '세트');
@@ -303,18 +372,34 @@ function setGroupHtml(b) {
       <span class="chev">▾</span>
     </button>
     <div class="set-group-body">
-      <div class="split-hd"><span>#</span><span>기록</span><span>휴식</span><span>영법 · 메모</span></div>
-      ${b.laps.map(splitRowHtml).join('')}
+      <div class="split-hd"><span></span><span>#</span><span>기록</span><span>휴식</span><span>${METRIC_LABEL[metricMode]}</span><span>영법 · 메모</span></div>
+      ${b.laps.map((l) => splitRowHtml(l, b)).join('')}
     </div>
   </div>`;
 }
-function splitRowHtml(l) {
+// 랩 하나를 보여주는 줄. splits(구간기록)가 있으면 화살표를 눌러 25m 턴 지점 등
+// 세부 구간을 펼쳐 볼 수 있습니다. 아직 워치 연동 전이라 대부분 비어 있는 게 정상입니다.
+function splitRowHtml(l, b) {
   const stroke = l.strokeOverride ? (P.STROKE_LABEL[l.strokeOverride] || l.strokeOverride) : '';
-  return `<div class="split-row ${l.needsReview ? 'flag' : ''}">
-    <span class="muted">${l.repNo}</span>
-    <span class="num">${l.timeRaw ? esc(l.timeRaw) : (l.isMissing ? '<span class="muted">누락</span>' : '<span class="muted">—</span>')}</span>
-    <span class="num muted">${l.restRaw ? esc(l.restRaw) : ''}</span>
-    <span class="small muted">${[stroke, l.note].filter(Boolean).map(esc).join(' · ')}</span>
+  const t = l.timeRaw ? P.toSeconds(l.timeRaw) : null;
+  let metricVal = '';
+  if (l.strokeCount) {
+    if (metricMode === 'count') metricVal = String(l.strokeCount);
+    else if (metricMode === 'dps' && b.distance) metricVal = (b.distance / l.strokeCount).toFixed(2);
+    else if (metricMode === 'rate' && t) metricVal = `${Math.round((l.strokeCount / t) * 60)}`;
+  }
+  const splits = l.splits || [];
+  const hasSplits = splits.length > 0;
+  return `<div class="split-row-wrap">
+    <div class="split-row ${l.needsReview ? 'flag' : ''}">
+      ${hasSplits ? '<button class="split-toggle" data-act="toggle-split-detail">▸</button>' : '<span></span>'}
+      <span class="muted">${l.repNo}</span>
+      <span class="num">${l.timeRaw ? esc(l.timeRaw) : (l.isMissing ? '<span class="muted">누락</span>' : '<span class="muted">—</span>')}</span>
+      <span class="num muted">${l.restRaw ? esc(l.restRaw) : ''}</span>
+      <span class="num muted">${metricVal || '—'}</span>
+      <span class="small muted">${[stroke, l.note].filter(Boolean).map(esc).join(' · ')}</span>
+    </div>
+    ${hasSplits ? `<div class="split-detail" hidden>${splits.map((sp) => `<div class="split-detail-row"><span class="muted">${sp.distance ? sp.distance + 'm 지점' : '구간'}</span><span class="num">${sp.timeRaw ? esc(sp.timeRaw) : '—'}</span></div>`).join('')}</div>` : ''}
   </div>`;
 }
 function wireSessionView(container, d) {
@@ -325,6 +410,16 @@ function wireSessionView(container, d) {
       body.hidden = !open;
       btn.classList.toggle('open', open);
     });
+  });
+  container.querySelectorAll('.split-toggle').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const detail = btn.closest('.split-row-wrap').querySelector('.split-detail');
+      detail.hidden = !detail.hidden;
+      btn.textContent = detail.hidden ? '▸' : '▾';
+    });
+  });
+  container.querySelectorAll(`input[name="metric-mode-${d.id}"]`).forEach((r) => {
+    r.addEventListener('change', () => { metricMode = r.value; showSessionView(container, d); });
   });
   container.querySelector('[data-act="edit-session"]').onclick = () => {
     const original = JSON.parse(JSON.stringify(d)); // 취소하면 편집 중 바뀐 값을 되돌리기 위한 원본 복사본
@@ -341,6 +436,7 @@ function sessionEditHtml(d) {
     </div>
     <label class="block">컨디션/메모<textarea data-ef="condition" rows="2">${esc(d.condition)}</textarea></label>
     <div class="blocks">${d.blocks.map(blockHtml).join('') || '<p class="small muted">세트가 없습니다.</p>'}</div>
+    <button class="ghost sm" data-act="add-set">+ 세트 추가</button>
     <div class="row end">
       <button class="ghost sm" data-act="cancel-edit">취소</button>
       <button class="ghost sm" data-act="delete-session">이 기록 삭제</button>
@@ -353,7 +449,7 @@ function wireSessionEdit(container, d, onCancel) {
     const ev = input.tagName === 'SELECT' ? 'change' : 'input';
     input.addEventListener(ev, () => (d[f] = f === 'poolLength' ? +input.value : input.value));
   });
-  d.blocks.forEach((b) => wireBlock(b));
+  renderBlocks(container, d, emptyBlock);
   container.querySelector('[data-act="save-session"]').onclick = () => saveSessionEdit(d);
   container.querySelector('[data-act="delete-session"]').onclick = () => deleteSession(d);
   if (onCancel) container.querySelector('[data-act="cancel-edit"]').onclick = onCancel;
@@ -457,15 +553,38 @@ function drawTrendChart(box, points) {
   const gridC = cssVar('--line'), mutedC = cssVar('--mute'), lineC = cssVar('--acc'), surfC = cssVar('--s1'), inkC = cssVar('--ink');
   const last = pts[pts.length - 1];
   const ticks = [y0 + pad, (y0 + y1) / 2, y1 - pad];
-  box.innerHTML = `<svg viewBox="0 0 ${W} ${H}">
+  box.innerHTML = `<div class="chart-wrap">
+    <svg viewBox="0 0 ${W} ${H}">
     ${ticks.map((v) => `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="${gridC}" stroke-width="1"/>
       <text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end" font-size="11" fill="${mutedC}">${P.fmtSec(v)}</text>`).join('')}
     <path d="${line}" fill="none" stroke="${lineC}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-    ${pts.map((p) => `<circle cx="${p.px}" cy="${p.py}" r="3.5" fill="${lineC}" stroke="${surfC}" stroke-width="1.5"><title>${p.date} · ${P.fmtSec(p.y)}</title></circle>`).join('')}
+    ${pts.map((p) => `<circle cx="${p.px}" cy="${p.py}" r="3.5" fill="${lineC}" stroke="${surfC}" stroke-width="1.5"/>`).join('')}
     <text x="${last.px}" y="${last.py - 9}" text-anchor="middle" font-size="13" font-weight="600" fill="${inkC}">${P.fmtSec(last.y)}</text>
     <text x="${L}" y="${H - 5}" font-size="11" fill="${mutedC}">${points[0].date}</text>
     ${points.length > 1 ? `<text x="${W - R}" y="${H - 5}" text-anchor="end" font-size="11" fill="${mutedC}">${points[points.length - 1].date}</text>` : ''}
-  </svg>`;
+    ${pts.map((p, i) => `<circle cx="${p.px}" cy="${p.py}" r="10" fill="transparent" data-i="${i}" class="hit"/>`).join('')}
+    </svg>
+    <div class="chart-tip" hidden></div>
+  </div>`;
+
+  const tip = box.querySelector('.chart-tip');
+  const svgEl = box.querySelector('svg');
+  const showTip = (p) => {
+    tip.textContent = `${p.date} · ${P.fmtSec(p.y)}`;
+    tip.hidden = false;
+    const rect = svgEl.getBoundingClientRect();
+    const scale = rect.width / W;
+    tip.style.left = `${p.px * scale}px`;
+    tip.style.top = `${p.py * scale}px`;
+  };
+  const hideTip = () => { tip.hidden = true; };
+  box.querySelectorAll('circle.hit').forEach((c) => {
+    const p = pts[+c.dataset.i];
+    c.addEventListener('mouseenter', () => showTip(p));
+    c.addEventListener('mouseleave', hideTip);
+    c.addEventListener('touchstart', (e) => { e.preventDefault(); showTip(p); }, { passive: false });
+  });
+  svgEl.addEventListener('touchstart', (e) => { if (!e.target.classList.contains('hit')) hideTip(); });
 }
 
 // ── 백업 (기기를 바꾸거나 브라우저 데이터를 지우기 전에) ──
