@@ -93,6 +93,21 @@ function parseNamedHeader(line) {
   return { distance: null, repCount: null, intervalRaw: null, intervalSec: null, stroke: findStroke(line), rawHeader: line };
 }
 
+// "혼계영/개인 세트 (25m, 종목별 & 휴식 표기)", "자유형 (인터벌 미상)" 처럼 거리·반복
+// 표기가 정식 헤더 형태가 아닌 제목 줄. 이런 줄을 헤더로 인식 못 하면 그 아래 랩들이
+// 직전 세트에 합쳐져서 거리(25m/50m 등)를 잘못 물려받는 문제가 생겨서 별도로 감지한다.
+// 기록처럼 보이는 줄(초 단위 숫자, 랩 번호로 시작)은 제외하고, 괄호로 끝나는 제목 줄만 인정.
+function parseOrphanHeader(line) {
+  if (parseSetHeader(line) || parseNamedHeader(line)) return null;
+  const t = line.trim();
+  if (!t) return null;
+  if (/\d+['.]\d/.test(t)) return null;
+  if (/^\d+[.).]/.test(t)) return null;
+  if (!/\)\s*$/.test(t)) return null;
+  const distM = t.match(/(\d{2,3})m/);
+  return { distance: distM ? parseInt(distM[1]) : null, repCount: null, intervalRaw: null, intervalSec: null, stroke: findStroke(t), rawHeader: t };
+}
+
 // ── 랩 한 줄에서 부가 정보를 하나씩 뽑아내는 조각 함수들 (원본 parseLapLine과 동일한 규칙) ──
 function extractStroke(line) {
   for (const [kr, en] of Object.entries(STROKE_MAP)) {
@@ -240,7 +255,7 @@ function parseSwimBlock(rawText) {
   let header = null;
   const lapLines = [];
   for (const line of lines) {
-    const h = parseSetHeader(line) || parseNamedHeader(line);
+    const h = parseSetHeader(line) || parseNamedHeader(line) || parseOrphanHeader(line);
     if (h && !header) { header = h; continue; }
     lapLines.push(line);
   }
@@ -317,7 +332,7 @@ function splitSwimText(raw) {
   let current = [];
   for (const line of bodyLines) {
     const trimmed = line.trim();
-    if ((parseSetHeader(trimmed) || parseNamedHeader(trimmed)) && current.some((l) => l.trim())) {
+    if ((parseSetHeader(trimmed) || parseNamedHeader(trimmed) || parseOrphanHeader(trimmed)) && current.some((l) => l.trim())) {
       blocks.push(current.join('\n'));
       current = [line];
     } else current.push(line);
@@ -373,7 +388,7 @@ function splitSwimLog(fullText) {
     let current = [];
     for (const line of kept) {
       const trimmed = line.trim();
-      if ((parseSetHeader(trimmed) || parseNamedHeader(trimmed)) && current.some((l) => l.trim())) {
+      if ((parseSetHeader(trimmed) || parseNamedHeader(trimmed) || parseOrphanHeader(trimmed)) && current.some((l) => l.trim())) {
         blocks.push(current.join('\n'));
         current = [line];
       } else current.push(line);

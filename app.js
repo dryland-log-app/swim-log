@@ -411,25 +411,25 @@ function trendPoints(stroke, distance) {
   return pts.sort((a, b) => a.date.localeCompare(b.date));
 }
 
+// 기록 추이 선택 목록은 종목별로 고정해서 보여줍니다 (자유형/접영/배영/평영 x 25m/50m).
+// 실제로 그 조합의 기록이 없으면 그래프 자리에 "아직 기록이 없습니다"라고만 뜹니다.
+const TREND_COMBOS = ['free', 'fly', 'back', 'breast'].flatMap((s) => [25, 50].map((d) => [s, d]));
+
 function loadBests() {
   const box = $('#bests');
   bestCombos = personalBests();
-  if (!bestCombos.length) {
-    box.innerHTML = '<p class="small muted">기록을 저장하면 종목별 베스트가 여기 모입니다.</p>';
-    $('#trend-pick').innerHTML = '';
-    $('#trend-chart').innerHTML = '<div class="empty">기록이 쌓이면 그래프가 생깁니다</div>';
-    return;
-  }
-  box.innerHTML = `<div class="best-grid">${bestCombos.map((b) => `<div class="best-tile">
+  box.innerHTML = bestCombos.length
+    ? `<div class="best-grid">${bestCombos.map((b) => `<div class="best-tile">
       <div class="l">${P.STROKE_LABEL[b.stroke] || b.stroke} ${b.distance}m</div>
       <div class="v">${P.fmtSec(b.best_time_sec)}</div>
       <div class="d">${b.best_date}</div>
-    </div>`).join('')}</div>`;
+    </div>`).join('')}</div>`
+    : '<p class="small muted">기록을 저장하면 종목별 베스트가 여기 모입니다.</p>';
 
   const pick = $('#trend-pick');
   const prev = pick.value;
-  pick.innerHTML = bestCombos.map((b) => `<option value="${b.stroke}|${b.distance}">${P.STROKE_LABEL[b.stroke] || b.stroke} ${b.distance}m</option>`).join('');
-  pick.value = bestCombos.some((b) => `${b.stroke}|${b.distance}` === prev) ? prev : pick.options[0].value;
+  pick.innerHTML = TREND_COMBOS.map(([stroke, distance]) => `<option value="${stroke}|${distance}">${P.STROKE_LABEL[stroke] || stroke} ${distance}m</option>`).join('');
+  pick.value = TREND_COMBOS.some(([s, d]) => `${s}|${d}` === prev) ? prev : pick.options[0].value;
   loadTrend();
 }
 $('#trend-pick').addEventListener('change', loadTrend);
