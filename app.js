@@ -1,21 +1,21 @@
-// Swim Log — Supabase 연동 · 텍스트 붙여넣기 → 파싱 검수 → 저장
+// Swim Log — 텍스트 붙여넣기 → 파싱 검수 → 저장 (이 폰/컴퓨터의 브라우저에 저장, 로그인 없음)
+// 나중에 여러 기기 동기화가 필요해지면, saveOneDay/saveSessionEdit/deleteSession 자리에
+// 서버 저장(예: Supabase)을 다시 붙이면 됩니다 — 화면 쪽 코드는 그대로 써도 됩니다.
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const P = window.SwimParser;
 
-const sb = supabase.createClient(window.SUPABASE_URL, window.SUPABASE_KEY);
-
 const SET_TYPES = [['warmup', '웜업'], ['main', '메인'], ['sprint', '스프린트'], ['underwater', '잠영'], ['dolphin', '돌핀킥'], ['down', '다운'], ['other', '기타']];
 const STROKES = [['unknown', '미지정'], ['free', '자유형'], ['fly', '접영'], ['back', '배영'], ['breast', '평영'], ['im', 'IM'], ['mixed', '혼합']];
 
-let session = null;      // supabase auth session
-let draftDays = null;    // 파싱해서 화면에 올려둔, 아직 저장 안 한 날짜들 (1개든 여러 개든 배열)
+let draftDays = null; // 파싱해서 화면에 올려둔, 아직 저장 안 한 날짜들 (1개든 여러 개든 배열)
 // toISOString()은 UTC 기준이라 한국(UTC+9)에서는 자정 근처에 날짜가 하루 밀립니다.
 // 반드시 로컬 날짜 값(getFullYear/Month/Date)으로 직접 조합합니다.
 const pad2 = (n) => String(n).padStart(2, '0');
 const isoLocal = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 const today = () => isoLocal(new Date());
+const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
 function toast(msg) {
   const t = $('#toast');
   t.textContent = msg;
@@ -24,44 +24,27 @@ function toast(msg) {
   toast._t = setTimeout(() => (t.hidden = true), 3200);
 }
 
-// ── 인증 ──
-async function refreshAuthUI() {
-  const { data } = await sb.auth.getSession();
-  session = data.session;
-  $('#authed').hidden = !session;
-  $('#anon').hidden = !!session;
-  if (session) {
-    $('#whoami').textContent = session.user.email;
-    loadRecent();
-    loadBests();
+// ── 로컬 저장소 ──
+// 세션 하나의 모양이 그대로 "검수 화면"에서 쓰는 모양과 같습니다: date/location/poolLength/condition + blocks(세트) 배열.
+const STORE_KEY = 'swimlog.v1';
+let S;
+function loadStore() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    S = raw ? JSON.parse(raw) : { v: 1, sessions: [] };
+    if (!Array.isArray(S.sessions)) S.sessions = [];
+  } catch (e) {
+    S = { v: 1, sessions: [] };
   }
 }
-sb.auth.onAuthStateChange((_evt, s) => { session = s; refreshAuthUI(); });
-
-// 매직 링크 로그인. Supabase 쪽 Authentication → URL Configuration의 Site URL이
-// 실제 배포 주소로 맞춰져 있어야 메일의 링크가 정상적으로 열립니다.
-let pendingEmail = '';
-async function sendCode() {
-  const email = $('#email').value.trim();
-  if (!email) return toast('이메일을 입력해 주세요');
-  const btn = $('#send-code');
-  btn.disabled = true;
-  btn.textContent = '보내는 중…';
-  const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true, emailRedirectTo: location.href } });
-  btn.disabled = false;
-  btn.textContent = '로그인 링크 보내기';
-  if (error) return toast('전송 실패: ' + error.message);
-  pendingEmail = email;
-  $('#code-sent-to').textContent = email;
-  $('#step-email').hidden = true;
-  $('#step-code').hidden = false;
+function saveStore() {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(S));
+  } catch (e) {
+    toast('저장 공간이 부족합니다. 백업 후 오래된 기록을 지워주세요.');
+  }
 }
-$('#send-code').addEventListener('click', sendCode);
-$('#email').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendCode(); });
-$('#resend-code').addEventListener('click', sendCode);
-$('#change-email').addEventListener('click', () => { $('#step-email').hidden = false; $('#step-code').hidden = true; });
-
-$('#logout').addEventListener('click', async () => { await sb.auth.signOut(); draftDays = null; renderDraft(); });
+loadStore();
 
 // ── 붙여넣기 → 파싱 ──
 // 날짜가 하나든 여러 개 섞여 있든 같은 방식으로 처리합니다. 앞에 날짜 줄이 없으면 오늘 날짜 하루로 취급합니다.
@@ -233,119 +216,55 @@ function renderBlockLaps(b) {
   wireBlock(b);
 }
 
-// ── 저장 (하루치를 실제로 Supabase에 넣는 부분 — 날짜 1개짜리든 여러 개 묶음이든 이걸 반복 호출) ──
-async function saveOneDay(day) {
-  const [yy, mm, dd] = day.date.split('-').map(Number);
-  const weekday = ['일', '월', '화', '수', '목', '금', '토'][new Date(yy, mm - 1, dd).getDay()];
-  const { data: sessRow, error: e1 } = await sb.from('sessions').insert({
-    user_id: session.user.id,
-    session_date: day.date,
-    weekday,
-    location: day.location || null,
-    pool_length: day.poolLength,
-    condition_note: day.condition || null,
-  }).select().single();
-  if (e1) throw e1;
-
-  for (let i = 0; i < day.blocks.length; i++) {
-    const b = day.blocks[i];
-    const intervalSec = b.intervalRaw ? P.toSeconds(b.intervalRaw) : null;
-    const { data: setRow, error: e2 } = await sb.from('sets').insert({
-      session_id: sessRow.id,
-      order_index: i,
-      set_type: b.setType,
-      stroke: b.stroke,
-      distance: b.distance,
-      rep_count: b.repCount,
-      interval_mode: intervalSec ? 'fixed_interval' : 'none',
-      interval_or_pace_sec: intervalSec,
-      raw_header: b.rawHeader || null,
-    }).select().single();
-    if (e2) throw e2;
-
-    const lapRows = b.laps.map((l) => ({
-      set_id: setRow.id,
-      rep_no: l.repNo,
-      time_sec: l.timeRaw ? P.toSeconds(l.timeRaw) : null,
-      rest_sec: l.restRaw ? P.toSeconds(l.restRaw) : null,
-      stroke_override: l.strokeOverride || null,
-      stroke_count: l.strokeCount || null,
-      is_missing: !!l.isMissing,
-      needs_review: !!l.needsReview,
-      note: l.note || null,
-      raw_text: l.rawText || null,
-    }));
-    if (lapRows.length) {
-      const { error: e3 } = await sb.from('laps').insert(lapRows);
-      if (e3) throw e3;
-    }
-  }
+// ── 저장 (이 브라우저의 저장소에 넣기) ──
+function saveOneDay(day) {
+  S.sessions.push({ id: uid(), ...day });
 }
-
-async function saveAllDrafts() {
-  if (!draftDays || !draftDays.length || !session) return;
-  const btn = $('#save-draft');
-  btn.disabled = true;
+function saveAllDrafts() {
+  if (!draftDays || !draftDays.length) return;
   const total = draftDays.length;
-  let saved = 0;
-  try {
-    for (const day of draftDays) {
-      btn.textContent = total > 1 ? `저장 중… (${saved + 1}/${total})` : '저장 중…';
-      await saveOneDay(day);
-      saved++;
-    }
-    toast(total > 1 ? `${total}일 전체 저장했습니다` : '저장했습니다');
-    draftDays = null;
-    $('#raw-text').value = '';
-    renderDraft();
-    loadRecent();
-    loadBests();
-  } catch (err) {
-    toast(`${saved}/${total}일 저장 후 실패: ${err.message}`);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = total > 1 ? `${total}일 전체 저장` : '저장';
-  }
+  for (const day of draftDays) saveOneDay(day);
+  saveStore();
+  toast(total > 1 ? `${total}일 전체 저장했습니다` : '저장했습니다');
+  draftDays = null;
+  $('#raw-text').value = '';
+  renderDraft();
+  loadRecent();
+  loadBests();
 }
 
-// ── 최근 기록 (펼치면 검수 화면과 같은 표로 편집·저장·삭제까지 가능) ──
-async function loadRecent() {
+// ── 최근 기록 (펼치면 보기 좋은 표로, 편집·삭제까지 가능) ──
+function loadRecent() {
   const box = $('#recent');
-  box.innerHTML = '<div class="muted small">불러오는 중…</div>';
-  const { data, error } = await sb.from('sessions').select('id, session_date, weekday, location, pool_length').order('session_date', { ascending: false }).limit(15);
-  if (error) { box.innerHTML = `<div class="warn">불러오기 실패: ${esc(error.message)}</div>`; return; }
-  if (!data.length) { box.innerHTML = '<div class="muted small">아직 저장된 기록이 없습니다.</div>'; return; }
+  const list = S.sessions.slice().sort((a, b) => b.date.localeCompare(a.date));
+  if (!list.length) { box.innerHTML = '<div class="muted small">아직 저장된 기록이 없습니다.</div>'; return; }
   // 버튼 안에 편집용 입력칸까지 넣으면 브라우저가 클릭을 제대로 못 받아 접기/펴기가 꼬입니다.
   // 그래서 "누르는 줄"과 "펼쳐지는 내용"을 서로 다른 요소로 분리합니다.
-  box.innerHTML = data.map((s) => `<div class="recent-row">
+  box.innerHTML = list.map((s) => {
+    const [yy, mm, dd] = s.date.split('-').map(Number);
+    const weekday = ['일', '월', '화', '수', '목', '금', '토'][new Date(yy, mm - 1, dd).getDay()];
+    return `<div class="recent-row">
       <button class="recent-head" data-id="${s.id}">
-        <b>${s.session_date}${s.weekday ? `(${s.weekday})` : ''}</b>
-        <span class="muted">${esc(s.location || '')} · ${s.pool_length}m</span>
+        <b>${s.date}(${weekday})</b>
+        <span class="muted">${esc(s.location || '')} · ${s.poolLength}m</span>
         <span class="chev">▾</span>
       </button>
       <div class="detail" hidden></div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   $$('.recent-row', box).forEach((row) => {
     row.querySelector('.recent-head').addEventListener('click', () => toggleDetail(row));
   });
 }
-async function toggleDetail(row) {
+function toggleDetail(row) {
   const head = row.querySelector('.recent-head');
   const detail = row.querySelector('.detail');
   const wasOpen = !detail.hidden;
   detail.hidden = wasOpen;
   head.classList.toggle('open', !wasOpen);
-  if (wasOpen || detail.dataset.loaded) return;
-  detail.dataset.loaded = '1';
-  detail.innerHTML = '<p class="small muted">불러오는 중…</p>';
-  const id = head.dataset.id;
-  const [sessRes, setsRes] = await Promise.all([
-    sb.from('sessions').select('*').eq('id', id).single(),
-    sb.from('sets').select('*, laps(*)').eq('session_id', id).order('order_index'),
-  ]);
-  if (sessRes.error || setsRes.error) { detail.innerHTML = `<div class="warn">불러오기 실패: ${esc((sessRes.error || setsRes.error).message)}</div>`; return; }
-  setsRes.data.forEach((s) => s.laps.sort((a, b) => a.rep_no - b.rep_no));
-  const d = sessionToDraft(sessRes.data, setsRes.data);
+  if (wasOpen) return;
+  const d = S.sessions.find((s) => s.id === head.dataset.id);
+  if (!d) { detail.innerHTML = '<div class="warn">기록을 찾지 못했습니다 (삭제됐을 수 있습니다)</div>'; return; }
   showSessionView(detail, d);
 }
 
@@ -405,26 +324,6 @@ function wireSessionView(container, d) {
     wireSessionEdit(container, d, () => { Object.assign(d, original); showSessionView(container, d); });
   };
 }
-
-// DB에서 읽은 세션+세트+랩을 붙여넣기 검수 화면과 같은 모양으로 바꿔서, 같은 블록/랩 렌더링 함수를 그대로 재사용합니다.
-function sessionToDraft(sess, sets) {
-  return {
-    id: sess.id, date: sess.session_date, location: sess.location || '', poolLength: sess.pool_length || 25, condition: sess.condition_note || '',
-    blocks: sets.map((s, i) => ({
-      id: s.id, key: 'e' + s.id,
-      setType: s.set_type, stroke: s.stroke, distance: s.distance, repCount: s.rep_count,
-      intervalRaw: s.interval_or_pace_sec != null ? P.fmtSec(s.interval_or_pace_sec) : '',
-      rawHeader: s.raw_header || `${s.distance ?? '?'}m x${s.rep_count ?? '?'}`,
-      laps: s.laps.map((l) => ({
-        repNo: l.rep_no,
-        timeRaw: l.time_sec != null ? P.fmtSec(l.time_sec) : '',
-        restRaw: l.rest_sec != null ? P.fmtSec(l.rest_sec) : '',
-        strokeOverride: l.stroke_override || '', strokeCount: l.stroke_count,
-        isMissing: l.is_missing, needsReview: l.needs_review, note: l.note || '',
-      })),
-    })),
-  };
-}
 function sessionEditHtml(d) {
   return `
     <div class="row">
@@ -447,70 +346,66 @@ function wireSessionEdit(container, d, onCancel) {
     input.addEventListener(ev, () => (d[f] = f === 'poolLength' ? +input.value : input.value));
   });
   d.blocks.forEach((b) => wireBlock(b));
-  container.querySelector('[data-act="save-session"]').onclick = () => saveSessionEdit(d, container);
+  container.querySelector('[data-act="save-session"]').onclick = () => saveSessionEdit(d);
   container.querySelector('[data-act="delete-session"]').onclick = () => deleteSession(d);
   if (onCancel) container.querySelector('[data-act="cancel-edit"]').onclick = onCancel;
 }
-async function saveSessionEdit(d, container) {
-  const btn = container.querySelector('[data-act="save-session"]');
-  btn.disabled = true;
-  btn.textContent = '저장 중…';
-  try {
-    const [yy, mm, dd] = d.date.split('-').map(Number);
-    const weekday = ['일', '월', '화', '수', '목', '금', '토'][new Date(yy, mm - 1, dd).getDay()];
-    const { error: e1 } = await sb.from('sessions').update({
-      session_date: d.date, weekday, location: d.location || null, pool_length: d.poolLength, condition_note: d.condition || null,
-    }).eq('id', d.id);
-    if (e1) throw e1;
-    for (const b of d.blocks) {
-      const intervalSec = b.intervalRaw ? P.toSeconds(b.intervalRaw) : null;
-      const { error: e2 } = await sb.from('sets').update({
-        set_type: b.setType, stroke: b.stroke, distance: b.distance, rep_count: b.repCount,
-        interval_mode: intervalSec ? 'fixed_interval' : 'none', interval_or_pace_sec: intervalSec,
-      }).eq('id', b.id);
-      if (e2) throw e2;
-      // 랩은 통째로 바뀔 수 있어 (추가/삭제) 지우고 새로 넣는 방식으로 저장합니다.
-      const { error: eDel } = await sb.from('laps').delete().eq('set_id', b.id);
-      if (eDel) throw eDel;
-      const lapRows = b.laps.map((l) => ({
-        set_id: b.id, rep_no: l.repNo,
-        time_sec: l.timeRaw ? P.toSeconds(l.timeRaw) : null,
-        rest_sec: l.restRaw ? P.toSeconds(l.restRaw) : null,
-        stroke_override: l.strokeOverride || null, stroke_count: l.strokeCount || null,
-        is_missing: !!l.isMissing, needs_review: !!l.needsReview, note: l.note || null,
-      }));
-      if (lapRows.length) {
-        const { error: e3 } = await sb.from('laps').insert(lapRows);
-        if (e3) throw e3;
-      }
-    }
-    toast('수정했습니다');
-    loadRecent();
-    loadBests();
-  } catch (err) {
-    toast('저장 실패: ' + err.message);
-    btn.disabled = false;
-    btn.textContent = '수정 내용 저장';
-  }
+function saveSessionEdit(d) {
+  const idx = S.sessions.findIndex((s) => s.id === d.id);
+  if (idx === -1) return toast('저장 실패: 기록을 찾지 못했습니다');
+  S.sessions[idx] = JSON.parse(JSON.stringify(d));
+  saveStore();
+  toast('수정했습니다');
+  loadRecent();
+  loadBests();
 }
-async function deleteSession(d) {
+function deleteSession(d) {
   if (!confirm('이 기록을 완전히 삭제할까요? 되돌릴 수 없습니다.')) return;
-  const { error } = await sb.from('sessions').delete().eq('id', d.id);
-  if (error) return toast('삭제 실패: ' + error.message);
+  S.sessions = S.sessions.filter((s) => s.id !== d.id);
+  saveStore();
   toast('삭제했습니다');
   loadRecent();
   loadBests();
 }
 
-// ── 베스트 기록 · 기록 추이 ──
+// ── 베스트 기록 · 기록 추이 (전부 이 브라우저에 저장된 기록에서 바로 계산) ──
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 let bestCombos = []; // [{stroke, distance, best_time_sec, best_date}]
 
-async function loadBests() {
+function personalBests() {
+  const map = {};
+  for (const s of S.sessions) {
+    for (const b of s.blocks) {
+      if (!b.distance) continue;
+      for (const l of b.laps) {
+        if (l.isMissing || !l.timeRaw) continue;
+        const t = P.toSeconds(l.timeRaw);
+        if (t == null) continue;
+        const key = b.stroke + '|' + b.distance;
+        if (!map[key] || t < map[key].best_time_sec) map[key] = { stroke: b.stroke, distance: b.distance, best_time_sec: t, best_date: s.date };
+      }
+    }
+  }
+  return Object.values(map).sort((a, b) => a.stroke.localeCompare(b.stroke) || a.distance - b.distance);
+}
+function trendPoints(stroke, distance) {
+  const pts = [];
+  for (const s of S.sessions) {
+    for (const b of s.blocks) {
+      if (b.stroke !== stroke || b.distance !== distance) continue;
+      for (const l of b.laps) {
+        if (l.isMissing || !l.timeRaw) continue;
+        const t = P.toSeconds(l.timeRaw);
+        if (t != null) pts.push({ date: s.date, y: t });
+      }
+    }
+  }
+  return pts.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function loadBests() {
   const box = $('#bests');
-  const { data, error } = await sb.from('personal_bests').select('*').order('stroke').order('distance');
-  if (error) { box.innerHTML = `<div class="warn">불러오기 실패: ${esc(error.message)}</div>`; return; }
-  bestCombos = data || [];
+  bestCombos = personalBests();
   if (!bestCombos.length) {
     box.innerHTML = '<p class="small muted">기록을 저장하면 종목별 베스트가 여기 모입니다.</p>';
     $('#trend-pick').innerHTML = '';
@@ -530,22 +425,12 @@ async function loadBests() {
   loadTrend();
 }
 $('#trend-pick').addEventListener('change', loadTrend);
-
-async function loadTrend() {
+function loadTrend() {
   const val = $('#trend-pick').value;
   const chart = $('#trend-chart');
   if (!val) { chart.innerHTML = ''; return; }
   const [stroke, distance] = [val.split('|')[0], +val.split('|')[1]];
-  chart.innerHTML = '<p class="small muted">불러오는 중…</p>';
-  const { data, error } = await sb.from('laps')
-    .select('time_sec, sets!inner(stroke, distance, sessions!inner(session_date))')
-    .eq('sets.stroke', stroke).eq('sets.distance', distance)
-    .eq('is_missing', false).not('time_sec', 'is', null);
-  if (error) { chart.innerHTML = `<div class="warn">${esc(error.message)}</div>`; return; }
-  const points = data
-    .map((r) => ({ date: r.sets.sessions.session_date, y: r.time_sec }))
-    .sort((a, b) => a.date.localeCompare(b.date));
-  drawTrendChart(chart, points);
+  drawTrendChart(chart, trendPoints(stroke, distance));
 }
 
 // 얇은 선 + 마지막 값 라벨의 심플한 추이 차트 (기록은 낮을수록 좋으므로 y축 최댓값이 위)
@@ -575,4 +460,32 @@ function drawTrendChart(box, points) {
   </svg>`;
 }
 
-refreshAuthUI();
+// ── 백업 (기기를 바꾸거나 브라우저 데이터를 지우기 전에) ──
+function saveBackup() {
+  const blob = new Blob([JSON.stringify({ app: 'swim-log', exportedAt: new Date().toISOString(), ...S }, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `swim-log-backup-${today()}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  toast('백업 파일을 다운로드했습니다');
+}
+$('#backup-save').addEventListener('click', saveBackup);
+$('#backup-save2').addEventListener('click', saveBackup);
+$('#backup-file').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  let data;
+  try { data = JSON.parse(await file.text()); } catch (err) { return toast('백업 파일을 읽을 수 없습니다'); }
+  if (!data || !Array.isArray(data.sessions)) return toast('Swim Log 백업 파일이 아닙니다');
+  if (!confirm(`지금 있는 기록이 백업 파일의 기록 ${data.sessions.length}개로 바뀝니다. 계속할까요?`)) return;
+  S = { v: 1, sessions: data.sessions };
+  saveStore();
+  loadRecent();
+  loadBests();
+  toast('백업을 불러왔습니다');
+});
+
+loadRecent();
+loadBests();
