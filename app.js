@@ -92,6 +92,8 @@ function blockToDraft(b, i) {
     repCount: h.repCount ?? b.laps.length,
     intervalRaw: h.intervalRaw || '',
     rawHeader: h.rawHeader || '',
+    memo: (b.notes || []).join('\n'),
+    broken: !!h.broken, // 브로큰 세트(S1/S2): 한 번의 총거리 + 구간기록. 베스트/추이에는 넣지 않음
     laps: b.laps.map((l) => ({
       repNo: l.repNo,
       timeRaw: l.timeSec != null ? P.fmtSec(l.timeSec) : '',
@@ -149,7 +151,7 @@ function dayCardHtml(d, di) {
   </div>`;
 }
 function emptyBlock() {
-  return { key: uid(), setType: 'main', stroke: 'free', distance: null, repCount: null, intervalRaw: '', rawHeader: '', laps: [] };
+  return { key: uid(), setType: 'main', stroke: 'free', distance: null, repCount: null, intervalRaw: '', rawHeader: '', memo: '', laps: [] };
 }
 function wireDayCard(d, di) {
   const el = $(`.day-card[data-di="${di}"]`);
@@ -177,6 +179,7 @@ function blockHtml(b) {
       <button class="ghost sm" data-act="del-set" style="align-self:flex-end">세트 삭제</button>
     </div>
     <div class="small muted">원본: ${esc(b.rawHeader) || '(헤더 없음)'}</div>
+    <label class="block">세트 메모<textarea data-f="memo" rows="1" placeholder="설명·메모 (랩으로 세지 않음)">${esc(b.memo)}</textarea></label>
     <div style="overflow-x:auto">
     <table class="laps">
       <thead><tr><th>#</th><th>기록</th><th>휴식</th><th>스트로크</th><th>영법</th><th>메모</th><th>누락</th><th></th><th></th></tr></thead>
@@ -223,6 +226,7 @@ function splitsEditorHtml(splits) {
     ${splits.map((sp, j) => `<span class="row" style="margin:0;gap:4px;align-items:center" data-sj="${j}">
       <input data-sf="distance" type="number" value="${sp.distance ?? ''}" placeholder="25" style="width:50px">m
       <input data-sf="timeRaw" value="${esc(sp.timeRaw)}" placeholder="15.20" style="width:70px">
+      <input data-sf="restRaw" value="${esc(sp.restRaw)}" placeholder="휴식 12초" style="width:80px">
       <button class="ghost sm" data-act="del-split">×</button>
     </span>`).join('')}
     <button class="ghost sm" data-act="add-split">+ 구간 추가</button>
@@ -266,7 +270,7 @@ function wireBlock(b) {
       });
       span.querySelector('[data-act="del-split"]').onclick = () => { lap.splits.splice(+span.dataset.sj, 1); renderBlockLaps(b); };
     });
-    srow.querySelector('[data-act="add-split"]').onclick = () => { lap.splits.push({ distance: null, timeRaw: '' }); renderBlockLaps(b); };
+    srow.querySelector('[data-act="add-split"]').onclick = () => { lap.splits.push({ distance: null, timeRaw: '', restRaw: '' }); renderBlockLaps(b); };
   });
   el.querySelector('[data-act="add-lap"]').onclick = () => {
     b.laps.push({ repNo: b.laps.length + 1, timeRaw: '', restRaw: '', strokeOverride: '', strokeCount: null, splits: [], isMissing: false, needsReview: false, note: '', rawText: '' });
@@ -359,21 +363,30 @@ function sessionViewHtml(d) {
     <div class="set-groups">${d.blocks.map((b) => setGroupHtml(b)).join('') || '<p class="small muted">세트가 없습니다.</p>'}</div>`;
 }
 function setGroupTitle(b) {
+  if (b.broken && b.rawHeader) return /\d\s*m/i.test(b.rawHeader) || !b.distance ? b.rawHeader : `${b.rawHeader} · ${b.distance}m`;
   return (b.distance && b.repCount) ? `${b.distance}m x${b.repCount}` : (b.rawHeader || '세트');
 }
 function setGroupHtml(b) {
   const done = b.laps.filter((l) => l.timeRaw);
   const secs = done.map((l) => P.toSeconds(l.timeRaw)).filter((v) => v != null);
   const avg = secs.length ? secs.reduce((a, v) => a + v, 0) / secs.length : null;
+  // 브로큰 세트(S1/S2): 랩 한 줄 뒤에 숨기지 않고 구간(50m/25m/25m)을 바로 줄마다 보여준다.
+  const brokenSplits = b.broken && b.laps[0] && b.laps[0].splits && b.laps[0].splits.length ? b.laps[0].splits : null;
+  const summary = brokenSplits ? `합계 ${esc(b.laps[0].timeRaw)}` : `${done.length}/${b.laps.length}${avg != null ? ` · 평균 ${P.fmtSec(Math.round(avg * 100) / 100)}` : ''}`;
+  const body = brokenSplits
+    ? `<div class="split-hd"><span></span><span>#</span><span>구간 기록</span><span>휴식</span><span>거리</span><span></span></div>
+      ${brokenSplits.map((s, i) => `<div class="split-row"><span></span><span class="muted">${i + 1}</span><span class="num">${s.timeRaw ? esc(s.timeRaw) : '—'}</span><span class="num muted">${esc(s.restRaw || '')}</span><span class="num muted">${s.distance ? s.distance + 'm' : '—'}</span><span></span></div>`).join('')}`
+    : `<div class="split-hd"><span></span><span>#</span><span>기록</span><span>휴식</span><span>${METRIC_LABEL[metricMode]}</span><span>영법 · 메모</span></div>
+      ${b.laps.map((l) => splitRowHtml(l, b)).join('')}`;
   return `<div class="set-group">
     <button class="set-group-head">
       <span class="grow"><b>${esc(setGroupTitle(b))}</b>${b.intervalRaw ? ` <span class="small muted">@${esc(b.intervalRaw)}</span>` : ''}</span>
-      <span class="small muted">${done.length}/${b.laps.length}${avg != null ? ` · 평균 ${P.fmtSec(Math.round(avg * 100) / 100)}` : ''}</span>
+      <span class="small muted">${summary}</span>
       <span class="chev">▾</span>
     </button>
     <div class="set-group-body">
-      <div class="split-hd"><span></span><span>#</span><span>기록</span><span>휴식</span><span>${METRIC_LABEL[metricMode]}</span><span>영법 · 메모</span></div>
-      ${b.laps.map((l) => splitRowHtml(l, b)).join('')}
+      ${b.memo ? `<div class="small muted" style="padding:8px 12px 2px;white-space:pre-wrap">${esc(b.memo)}</div>` : ''}
+      ${body}
     </div>
   </div>`;
 }
@@ -399,7 +412,7 @@ function splitRowHtml(l, b) {
       <span class="num muted">${metricVal || '—'}</span>
       <span class="small muted">${[stroke, l.note].filter(Boolean).map(esc).join(' · ')}</span>
     </div>
-    ${hasSplits ? `<div class="split-detail" hidden>${splits.map((sp) => `<div class="split-detail-row"><span class="muted">${sp.distance ? sp.distance + 'm 지점' : '구간'}</span><span class="num">${sp.timeRaw ? esc(sp.timeRaw) : '—'}</span></div>`).join('')}</div>` : ''}
+    ${hasSplits ? `<div class="split-detail" hidden>${splits.map((sp) => `<div class="split-detail-row"><span class="muted">${sp.distance ? sp.distance + 'm 구간' : '구간'}</span><span class="num">${sp.timeRaw ? esc(sp.timeRaw) : '—'}${sp.restRaw ? ` <span class="muted">· 휴식 ${esc(sp.restRaw)}</span>` : ''}</span></div>`).join('')}</div>` : ''}
   </div>`;
 }
 function wireSessionView(container, d) {
@@ -480,7 +493,7 @@ function personalBests() {
   const map = {};
   for (const s of S.sessions) {
     for (const b of s.blocks) {
-      if (!b.distance) continue;
+      if (!b.distance || b.broken) continue;
       for (const l of b.laps) {
         if (l.isMissing || !l.timeRaw) continue;
         const t = P.toSeconds(l.timeRaw);
@@ -500,7 +513,7 @@ function trendPoints(stroke, distance) {
   const bestByDate = {};
   for (const s of S.sessions) {
     for (const b of s.blocks) {
-      if (b.stroke !== stroke || b.distance !== distance) continue;
+      if (b.broken || b.stroke !== stroke || b.distance !== distance) continue;
       for (const l of b.laps) {
         if (l.isMissing || !l.timeRaw) continue;
         const t = P.toSeconds(l.timeRaw);
@@ -535,26 +548,49 @@ function loadBests() {
   loadTrend();
 }
 $('#trend-pick').addEventListener('change', loadTrend);
+// 기록 추이 기간: '1','3','6','12'(개월) 또는 'all'. 고정 기간은 오늘까지의 실제 날짜 간격으로 그립니다.
+let trendPeriod = 'all';
+const dayMs = (iso) => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d).getTime(); };
+function trendRange() {
+  if (trendPeriod === 'all') return null;
+  const end = new Date(); end.setHours(0, 0, 0, 0);
+  const start = new Date(end); start.setMonth(start.getMonth() - +trendPeriod);
+  return { start: start.getTime(), end: end.getTime() };
+}
+$('#trend-period').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-p]');
+  if (!btn) return;
+  trendPeriod = btn.dataset.p;
+  $$('#trend-period button').forEach((b) => b.classList.toggle('on', b === btn));
+  loadTrend();
+});
 function loadTrend() {
   const val = $('#trend-pick').value;
   const chart = $('#trend-chart');
   if (!val) { chart.innerHTML = ''; return; }
   const [stroke, distance] = [val.split('|')[0], +val.split('|')[1]];
-  drawTrendChart(chart, trendPoints(stroke, distance));
+  const range = trendRange();
+  let pts = trendPoints(stroke, distance);
+  if (range) pts = pts.filter((p) => { const t = dayMs(p.date); return t >= range.start && t <= range.end; });
+  drawTrendChart(chart, pts, range, range ? '이 기간에 기록이 없습니다' : '아직 기록이 없습니다');
 }
 
 // 얇은 선 + 마지막 값 라벨의 심플한 추이 차트 (기록은 낮을수록 좋으므로 y축 최댓값이 위)
-function drawTrendChart(box, points) {
-  if (!points.length) { box.innerHTML = '<div class="empty">아직 기록이 없습니다</div>'; return; }
+// x축은 날짜 간격 그대로(기록 사이가 멀면 멀게). range가 있으면 그 기간 전체를, 없으면 첫~마지막 기록 사이를 그립니다.
+function drawTrendChart(box, points, range, emptyMsg) {
+  if (!points.length) { box.innerHTML = `<div class="empty">${emptyMsg || '아직 기록이 없습니다'}</div>`; return; }
   const W = 640, H = 180, L = 44, R = 16, T = 14, B = 22;
   const ys = points.map((p) => p.y);
   let y0 = Math.min(...ys), y1 = Math.max(...ys);
   if (y0 === y1) { y0 -= 1; y1 += 1; }
   const pad = (y1 - y0) * 0.1;
   y0 -= pad; y1 += pad;
-  const X = (i) => (points.length === 1 ? (W - L - R) / 2 + L : L + (i / (points.length - 1)) * (W - L - R));
+  const ts = points.map((p) => dayMs(p.date));
+  const tMin = range ? range.start : ts[0], tMax = range ? range.end : ts[ts.length - 1];
+  const X = (t) => (tMax === tMin ? L + (W - L - R) / 2 : L + ((t - tMin) / (tMax - tMin)) * (W - L - R));
   const Y = (v) => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
-  const pts = points.map((p, i) => ({ ...p, px: X(i), py: Y(p.y) }));
+  const pts = points.map((p, i) => ({ ...p, px: X(ts[i]), py: Y(p.y) }));
+  const dateL = isoLocal(new Date(tMin)), dateR = isoLocal(new Date(tMax));
   const line = pts.map((p, i) => `${i ? 'L' : 'M'}${p.px.toFixed(1)},${p.py.toFixed(1)}`).join('');
   const gridC = cssVar('--line'), mutedC = cssVar('--mute'), lineC = cssVar('--acc'), surfC = cssVar('--s1'), inkC = cssVar('--ink');
   const last = pts[pts.length - 1];
@@ -565,9 +601,9 @@ function drawTrendChart(box, points) {
       <text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end" font-size="11" fill="${mutedC}">${P.fmtSec(v)}</text>`).join('')}
     <path d="${line}" fill="none" stroke="${lineC}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
     ${pts.map((p) => `<circle cx="${p.px}" cy="${p.py}" r="3.5" fill="${lineC}" stroke="${surfC}" stroke-width="1.5"/>`).join('')}
-    <text x="${last.px}" y="${last.py - 9}" text-anchor="middle" font-size="13" font-weight="600" fill="${inkC}">${P.fmtSec(last.y)}</text>
-    <text x="${L}" y="${H - 5}" font-size="11" fill="${mutedC}">${points[0].date}</text>
-    ${points.length > 1 ? `<text x="${W - R}" y="${H - 5}" text-anchor="end" font-size="11" fill="${mutedC}">${points[points.length - 1].date}</text>` : ''}
+    <text x="${last.px}" y="${last.py - 9}" text-anchor="${last.px > W - 40 ? 'end' : 'middle'}" font-size="13" font-weight="600" fill="${inkC}">${P.fmtSec(last.y)}</text>
+    <text x="${L}" y="${H - 5}" font-size="11" fill="${mutedC}">${dateL}</text>
+    ${tMax !== tMin ? `<text x="${W - R}" y="${H - 5}" text-anchor="end" font-size="11" fill="${mutedC}">${dateR}</text>` : ''}
     ${pts.map((p, i) => `<circle cx="${p.px}" cy="${p.py}" r="10" fill="transparent" pointer-events="all" data-i="${i}" class="hit"/>`).join('')}
     </svg>
     <div class="chart-tip" hidden></div>

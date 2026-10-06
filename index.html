@@ -75,7 +75,7 @@ tr.flag{background:var(--warn-bg)}
 .set-group-head{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:10px 12px;background:var(--s2)}
 .set-group-head .chev{color:var(--mute);transition:transform .15s;flex:none}
 .set-group-head.open .chev{transform:rotate(180deg)}
-.split-hd,.split-row{display:grid;grid-template-columns:14px 18px 60px 56px 36px minmax(70px,1fr);gap:6px;padding:6px 6px;align-items:center}
+.split-hd,.split-row{display:grid;grid-template-columns:14px 18px 60px 64px 38px minmax(60px,1fr);gap:6px;padding:6px 6px;align-items:center}
 .split-row>span:not(:last-child){overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .split-hd{font-size:11px;color:var(--mute);font-weight:600;letter-spacing:.02em;padding-top:8px}
 .split-row{font-size:13px;border-top:1px solid var(--line)}
@@ -92,6 +92,8 @@ tr.flag{background:var(--warn-bg)}
 .best-tile .l{font-size:11px;color:var(--gold-ink);font-weight:600;letter-spacing:.02em}
 .best-tile .v{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:20px;font-weight:600;margin:2px 0;color:var(--ink)}
 .best-tile .d{font-size:11px;color:var(--mute)}
+.period{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.period button.on{background:var(--acc);color:var(--acc-ink);border-color:var(--acc);font-weight:600}
 #trend-chart svg{width:100%;height:auto;display:block;font-family:var(--mono)}
 #trend-chart .empty{color:var(--mute);font-size:13px;padding:20px 0;text-align:center}
 #trend-chart .chart-wrap{position:relative}
@@ -118,6 +120,13 @@ tr.flag{background:var(--warn-bg)}
     <div class="card">
       <h2>기록 추이</h2>
       <select id="trend-pick" style="width:100%;margin-bottom:10px"></select>
+      <div id="trend-period" class="period" role="group" aria-label="기간">
+        <button class="ghost sm" data-p="1">1개월</button>
+        <button class="ghost sm" data-p="3">3개월</button>
+        <button class="ghost sm" data-p="6">6개월</button>
+        <button class="ghost sm" data-p="12">12개월</button>
+        <button class="ghost sm on" data-p="all">전체</button>
+      </div>
       <div id="trend-chart"></div>
     </div>
 
@@ -151,7 +160,7 @@ tr.flag{background:var(--warn-bg)}
 </div>
 <div id="toast" hidden></div>
 
-<script src="parser.js?v=3"></script>
-<script src="app.js?v=3"></script>
+<script src="parser.js?v=7"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

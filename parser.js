@@ -85,6 +85,16 @@ function parseSetHeader(line) {
   };
 }
 
+// "S1", "S2", "S1(total 100m)" 같은 세트 구분 줄. 이것만으로는 평범한 세트 이름일 수도 있어서
+// 여기서는 세트 시작만 알아보고(sSet), 브로큰 스윔(한 번의 100m를 50+25+25로 끊어 헤엄)인지는
+// finalizeBrokenSets가 근거(총거리 표기 / "50m:32.64" 같은 구간 라벨 / "브로큰" 단어 /
+// 앞선 S세트가 브로큰)가 있을 때만 판단한다.
+function parseSNumberHeader(line) {
+  const m = line.trim().match(/^S\s*(\d+)\s*(?:[(\[（]\s*(?:total|합계|총)?\s*(\d{2,4})\s*m?\s*[)\]）])?\s*[:：]?\s*$/i);
+  if (!m) return null;
+  return { distance: m[2] ? parseInt(m[2]) : null, totalGiven: !!m[2], repCount: null, intervalRaw: null, intervalSec: null, stroke: null, rawHeader: line.trim(), sSet: true };
+}
+
 // "Set 1 — 100m 스트로크 카운트" 처럼 반복 횟수 표기가 없는 세트 제목
 function parseNamedHeader(line) {
   if (parseSetHeader(line)) return null;
@@ -181,10 +191,14 @@ function parseLapLine(rawLine, repNo) {
   const t = toSeconds(timeCandidate);
   const uncertain = UNCERTAIN_RE.test(rawLine);
 
+  // 시간도 휴식도 없고, 첫 토큰이 숫자 모양(33.39, 1'06, 30.xx)도 아니면 기록이 아니라 설명 줄이다
+  // ("접영 100m 브로큰 2세트 …", "S1"). 이런 줄은 빈 랩으로 만들지 않고 세트 메모로 뺀다.
+  const hasTimeLikeValue = /\d+['’]\d|\d+\.\d/.test(rawLine);
+  const isDescription = t === null && restSec === null && !isMissing && !hasTimeLikeValue && !/^\d[\d.'’"xX:]*$/.test(timeCandidate);
   return {
     repNo, timeSec: t, restSec, strokeOverride: stroke, strokeCount,
     isMissing, needsReview: (t === null && restSec === null && !isMissing) || uncertain,
-    note, rawText: rawLine,
+    note, rawText: rawLine, isDescription,
   };
 }
 
@@ -259,7 +273,7 @@ function parseSwimBlock(rawText) {
   let header = null;
   const lapLines = [];
   for (const line of lines) {
-    const h = parseSetHeader(line) || parseNamedHeader(line) || parseOrphanHeader(line);
+    const h = parseSNumberHeader(line) || parseSetHeader(line) || parseNamedHeader(line) || parseOrphanHeader(line);
     if (h && !header) { header = h; continue; }
     lapLines.push(line);
   }
@@ -271,8 +285,63 @@ function parseSwimBlock(rawText) {
     const sniffed = sniffBlockMeta(lapLines);
     if (sniffed) header = { distance: sniffed.distance, repCount: null, intervalRaw: null, intervalSec: null, stroke: sniffed.stroke, rawHeader: null };
   }
-  const laps = lapLinesToLaps(lapLines);
-  return { header, laps };
+  if (header && header.sSet && (!header.stroke || !header.distance)) {
+    const s = sniffBlockMeta(lapLines);
+    if (s) { header.stroke = header.stroke || s.stroke; header.distance = header.distance || s.distance; }
+  }
+  const { laps, notes } = lapLinesToLaps(lapLines);
+  return { header, laps, notes };
+}
+
+// 이 줄에서 새 세트가 시작되는가. S1/S2 줄은 앞에 "기록 줄"이 이미 있을 때만 새로 나눈다
+// (그 앞이 설명 줄뿐이면 설명은 첫 S 세트의 메모로 붙는다).
+function startsNewBlock(trimmed, current) {
+  if (parseSNumberHeader(trimmed)) return current.some((l) => /\d+['’]\d|\d+\.\d/.test(l));
+  return !!(parseSetHeader(trimmed) || parseNamedHeader(trimmed) || parseOrphanHeader(trimmed)) && current.some((l) => l.trim());
+}
+
+// S세트 → 브로큰 스윔 판단과 변환. 브로큰이면 랩 여러 개가 아니라 "한 번의 총거리 + 구간기록(splits)"으로 저장.
+// 근거가 없으면(평범한 "S1" 세트 이름) 건드리지 않고 그대로 일반 세트로 둔다.
+// 근거: 헤더의 총거리 표기 / "50m:32.64" 같은 구간 거리 라벨 / 설명의 "브로큰·broken" / 바로 앞 S세트가 브로큰.
+// 거리 표기를 생략한 뒤쪽 세트(S2)는 앞선 브로큰 S세트와 구간 개수가 같을 때만 구간거리·휴식을 물려받는다.
+const BROKEN_REST_RE = /휴식(?:\s*시간)?\s*:?\s*(\d+(?:\.\d+)?(?:\s*[~\-]\s*\d+(?:\.\d+)?)?)\s*초/;
+function finalizeBrokenSets(blocks) {
+  let prev = null; // 바로 앞 S세트
+  for (const b of blocks) {
+    const h = b.header;
+    if (!h || !h.sSet) { prev = null; continue; }
+    const noteText = (b.notes || []).join(' ');
+    const evidence = h.totalGiven || b.laps.some((l) => l.label && /\d\s*m/i.test(l.label)) || /브로큰|broken/i.test(noteText);
+    const follows = prev && prev.header.broken && b.laps.length >= 2;
+    if ((evidence || follows) && b.laps.some((l) => l.timeSec != null)) toBroken(b, follows ? prev : null, noteText);
+    prev = b;
+  }
+  return blocks;
+}
+function toBroken(b, prev, noteText) {
+  const h = b.header, src = b.laps;
+  const psp = prev && prev.laps[0] && prev.laps[0].splits;
+  const sameCount = psp && psp.length === src.length;
+  const rm = noteText.match(BROKEN_REST_RE);
+  const restDefault = rm ? rm[1].replace(/\s+/g, '') + '초' : (prev && prev.header.restDefault) || null;
+  const splits = src.map((l, i) => {
+    const dm = l.label && /(\d{2,3})\s*m/i.exec(l.label);
+    return {
+      distance: dm ? parseInt(dm[1]) : (sameCount ? psp[i].distance : null),
+      timeRaw: l.timeSec != null ? fmtSec(l.timeSec) : '',
+      restRaw: l.restSec != null ? fmtSec(l.restSec) : (i < src.length - 1 && restDefault) || '',
+    };
+  });
+  if (!h.stroke && prev) h.stroke = prev.header.stroke;
+  if (!h.distance && sameCount) h.distance = prev.header.distance;
+  const known = splits.every((s) => s.distance);
+  const sum = known ? splits.reduce((a, s) => a + s.distance, 0) : null;
+  if (!h.distance && known) h.distance = sum;
+  h.broken = true; h.restDefault = restDefault; h.repCount = 1;
+  const total = Math.round(src.reduce((a, l) => a + (l.timeSec || 0), 0) * 100) / 100;
+  // 총거리와 구간 거리의 합이 다르면 사람이 한 번 보도록 표시
+  const mismatch = known && h.distance && sum !== h.distance;
+  b.laps = [{ repNo: 1, timeSec: total, restSec: null, strokeOverride: null, strokeCount: null, isMissing: false, needsReview: mismatch || src.some((l) => l.needsReview), note: mismatch ? `구간 거리 합(${sum}m)이 총거리(${h.distance}m)와 다릅니다` : null, rawText: h.rawHeader, splits }];
 }
 
 function sniffBlockMeta(lapLines) {
@@ -292,6 +361,7 @@ function sniffBlockMeta(lapLines) {
 // 한 세트에 속하는 원본 줄들 -> 랩 배열. 라벨 분리 → 화살표 개수 확인 → 슬래시 분리 순으로 처리.
 function lapLinesToLaps(lapLines) {
   const rawLaps = [];
+  const notes = []; // 기록이 아닌 설명 줄 → 세트 메모
   let n = 1;
   for (const rawWithBullet of lapLines) {
     const raw = rawWithBullet.replace(/^[*\-]\s*/, '');
@@ -312,7 +382,9 @@ function lapLinesToLaps(lapLines) {
         rawLaps.push(...laps);
       } else {
         const lap = parseLapLine(body, n);
-        if (lap) { n++; rawLaps.push(lap); }
+        if (lap) lap.label = seg.label || null;
+        if (lap && lap.isDescription) notes.push(lap.rawText);
+        else if (lap) { n++; rawLaps.push(lap); }
       }
     }
   }
@@ -320,6 +392,8 @@ function lapLinesToLaps(lapLines) {
   const merged = [];
   for (const lap of rawLaps) {
     const restOnly = lap.timeSec === null && lap.restSec !== null && !lap.needsReview;
+    // 맨 앞의 "휴식 10초" 같은 줄은 붙일 직전 랩이 없다 → 빈 랩이 아니라 설명(세트 메모)으로 본다
+    if (restOnly && !merged.length) { notes.push(lap.rawText); continue; }
     if (restOnly && merged.length && merged[merged.length - 1].restSec === null) {
       merged[merged.length - 1].restSec = lap.restSec;
       continue;
@@ -327,7 +401,7 @@ function lapLinesToLaps(lapLines) {
     merged.push(lap);
   }
   merged.forEach((lap, i) => { lap.repNo = i + 1; });
-  return merged;
+  return { laps: merged, notes };
 }
 
 // ── 여러 세트가 섞인 하루치 텍스트 → 세트 여러 개로 분리 ──
@@ -358,13 +432,13 @@ function splitSwimText(raw) {
   let current = [];
   for (const line of bodyLines) {
     const trimmed = line.trim();
-    if ((parseSetHeader(trimmed) || parseNamedHeader(trimmed) || parseOrphanHeader(trimmed)) && current.some((l) => l.trim())) {
+    if (startsNewBlock(trimmed, current)) {
       blocks.push(current.join('\n'));
       current = [line];
     } else current.push(line);
   }
   if (current.some((l) => l.trim())) blocks.push(current.join('\n'));
-  return { meta, note, blocks: blocks.filter((b) => b.trim()).map(parseSwimBlock) };
+  return { meta, note, blocks: finalizeBrokenSets(blocks.filter((b) => b.trim()).map(parseSwimBlock)) };
 }
 
 // "메모: ...", "웜업: ..." 줄은 랩으로 보지 않고 세션 메모로 뽑아낸다.
@@ -414,7 +488,7 @@ function splitSwimLog(fullText) {
     let current = [];
     for (const line of kept) {
       const trimmed = line.trim();
-      if ((parseSetHeader(trimmed) || parseNamedHeader(trimmed) || parseOrphanHeader(trimmed)) && current.some((l) => l.trim())) {
+      if (startsNewBlock(trimmed, current)) {
         blocks.push(current.join('\n'));
         current = [line];
       } else current.push(line);
@@ -423,7 +497,7 @@ function splitSwimLog(fullText) {
     days.push({
       date: `${h.y}-${String(h.month).padStart(2, '0')}-${String(h.day).padStart(2, '0')}`,
       weekday: h.weekday, location: h.location, poolLength: h.poolLength || 25, note,
-      blocks: blocks.filter((b) => b.trim()).map(parseSwimBlock),
+      blocks: finalizeBrokenSets(blocks.filter((b) => b.trim()).map(parseSwimBlock)),
     });
   }
   return days;
