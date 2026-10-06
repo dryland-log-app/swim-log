@@ -304,7 +304,14 @@ function startsNewBlock(trimmed, current) {
 // 근거가 없으면(평범한 "S1" 세트 이름) 건드리지 않고 그대로 일반 세트로 둔다.
 // 근거: 헤더의 총거리 표기 / "50m:32.64" 같은 구간 거리 라벨 / 설명의 "브로큰·broken" / 바로 앞 S세트가 브로큰.
 // 거리 표기를 생략한 뒤쪽 세트(S2)는 앞선 브로큰 S세트와 구간 개수가 같을 때만 구간거리·휴식을 물려받는다.
-const BROKEN_REST_RE = /휴식(?:\s*시간)?\s*:?\s*(\d+(?:\.\d+)?(?:\s*[~\-]\s*\d+(?:\.\d+)?)?)\s*초/;
+const BROKEN_REST_RE = /(?:휴식|쉬는\s*시간)(?:\s*시간)?\s*:?\s*(\d+(?:\.\d+)?(?:\s*[~\-]\s*\d+(?:\.\d+)?)?)\s*초/;
+// "브로큰 접영 100m 2세트" 같은 시리즈 설명 줄 → 세트마다 "접영 100m 1세트", "접영 100m 2세트" 메모를 붙인다.
+function seriesFromNotes(notes) {
+  const line = (notes || []).find((l) => /\d{2,3}\s*m/i.test(l) && /\d+\s*세트/.test(l));
+  if (!line) return null;
+  const label = line.replace(/브로큰|broken/gi, '').replace(/\d+\s*세트/g, '').replace(/[,·]/g, ' ').replace(/\s+/g, ' ').trim();
+  return label ? { line, label } : null;
+}
 function finalizeBrokenSets(blocks) {
   let prev = null; // 바로 앞 S세트
   for (const b of blocks) {
@@ -314,6 +321,24 @@ function finalizeBrokenSets(blocks) {
     const evidence = h.totalGiven || b.laps.some((l) => l.label && /\d\s*m/i.test(l.label)) || /브로큰|broken/i.test(noteText);
     const follows = prev && prev.header.broken && b.laps.length >= 2;
     if ((evidence || follows) && b.laps.some((l) => l.timeSec != null)) toBroken(b, follows ? prev : null, noteText);
+    // 같은 시리즈의 뒤쪽 S세트(설명이 없는 S2 등)는 영법·거리를 앞선 S세트에서 이어받는다
+    if (prev) {
+      if (!h.stroke) h.stroke = prev.header.stroke;
+      if (!h.distance && !h.broken) h.distance = prev.header.distance;
+    }
+    // 세트 메모: 시리즈 설명(앞선 S세트 것 포함)이 있으면 "접영 100m N세트"로. 구간 휴식으로 옮겨간 "쉬는시간 12~13초" 줄은 중복이라 뺀다.
+    const series = seriesFromNotes(b.notes) || (prev && prev.header.series) || null;
+    if (series) {
+      h.series = series;
+      const n = (h.rawHeader.match(/\d+/) || [])[0];
+      const keep = (b.notes || []).filter((l) => {
+        if (l === series.line) return false;
+        if (!h.broken) return true;
+        const m = l.match(BROKEN_REST_RE);
+        return !(m && l.replace(m[0], '').replace(/구간별|구간마다|구간 사이|사이마다/g, '').trim() === '');
+      });
+      b.notes = [`${series.label} ${n}세트`, ...keep];
+    }
     prev = b;
   }
   return blocks;
