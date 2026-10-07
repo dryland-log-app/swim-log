@@ -37,7 +37,7 @@ function normalizeText(raw) {
 
 function findStroke(text) {
   for (const [kr, en] of Object.entries(STROKE_MAP)) {
-    if (new RegExp(`(^|\\s)${kr}(\\s|$)`).test(text)) return en;
+    if (new RegExp(`(^|[\\s(\\[])${kr}([\\s)\\],]|$)`).test(text)) return en;
   }
   return null;
 }
@@ -223,7 +223,46 @@ function looksLikeSlashGroup(rawLine) {
   const numericish = parts.filter((p) => /^\d/.test(extractStroke(p).line.trim()));
   return numericish.length >= Math.ceil(parts.length / 2);
 }
-function expandSlashLine(rawLine, startRepNo) {
+// "18.85 / 20.07 / 19.13 / 19.34 (100m, 12strokes) → 1'48.98 휴식" — 줄 안 괄호에 거리가 있으면
+// 슬래시(또는 &)로 나뉜 값들은 별개 랩이 아니라 "그 거리를 한 번 헤엄친 랩의 구간 기록"이다.
+// 랩 1개(구간 합계) + splits로 만든다. 스트로크 수는 구간당 값이라 랩에는 (구간 수 x 값)을 넣는다.
+// 거리/구간 개수가 맞지 않으면 null을 돌려 기존처럼 값마다 랩으로 처리한다.
+function wholeRepLap(rawLine, repNo) {
+  const dm = rawLine.match(/\(\s*(\d{2,3})\s*m\b/);
+  if (!dm) return null;
+  const repDist = parseInt(dm[1]);
+  let line = rawLine.trim().replace(/^\d+\.\s+/, '').replace(/^[*\-]\s*/, '');
+  const missing = extractMissing(rawLine);
+  let strokeCount, note, restSec;
+  ({ value: strokeCount, line } = extractStrokeCount(line));
+  ({ value: note, line } = extractNote(line));
+  ({ value: restSec, line } = extractRest(line));
+  const tokens = line.split(/[\/&]/).map((s) => s.trim()).filter(Boolean);
+  if (tokens.length < 2 || tokens.some((t) => extractStroke(t).value)) return null;
+  const units = repDist % 25 === 0 ? repDist / 25 : 0;
+  let splits;
+  if (!missing && repDist % tokens.length === 0) {
+    const seg = repDist / tokens.length;
+    splits = tokens.map((t) => ({ distance: seg, timeRaw: t, restRaw: '', strokeCount }));
+  } else if (units && tokens.length <= units) {
+    splits = tokens.map((t) => ({ distance: 25, timeRaw: t, restRaw: '', strokeCount }));
+    for (let k = tokens.length; k < units; k++) splits.push({ distance: 25, timeRaw: '', restRaw: '', strokeCount: null });
+  } else return null;
+  const secs = splits.map((s) => (s.timeRaw ? toSeconds(s.timeRaw) : null));
+  const bad = splits.some((s, i) => s.timeRaw && secs[i] == null);
+  const complete = !bad && splits.every((s) => s.timeRaw);
+  const total = complete ? Math.round(secs.reduce((a, s) => a + s, 0) * 100) / 100 : null;
+  return {
+    repNo, timeSec: total, restSec, strokeOverride: null,
+    strokeCount: strokeCount != null ? strokeCount * tokens.length : null,
+    isMissing: missing && !complete, needsReview: bad || (!complete && !missing),
+    note: note ? note.replace(/^[\s,]+|[\s,]+$/g, '').replace(/,\s*,/g, ',') : null, rawText: rawLine, splits, repDist,
+  };
+}
+
+function expandSlashLine(rawLine, startRepNo, noWhole) {
+  const whole = noWhole ? null : wholeRepLap(rawLine, startRepNo);
+  if (whole) return [whole];
   let line = rawLine.trim().replace(/^\d+\.\s+/, '').replace(/^[*\-]\s*/, '');
   // 그룹 전체에 한 번만 있는 것으로 보고 뽑아내는 정보 (스트로크 수 · 메모 · 휴식)
   let strokeCount, note, restSec;
@@ -303,7 +342,17 @@ function parseSwimBlock(rawText) {
     const s = sniffBlockMeta(lapLines);
     if (s) { header.stroke = header.stroke || s.stroke; header.distance = header.distance || s.distance; }
   }
-  const { laps, notes } = lapLinesToLaps(lapLines);
+  let parsed = lapLinesToLaps(lapLines);
+  // "(100m …)" 줄(한 번에 헤엄친 랩 + 구간)과 일반 랩이 한 세트에 섞여 있으면 세트 거리를 하나로 정할 수 없으니
+  // 구간 묶기를 하지 않고 값마다 랩으로 둔다 (예: 25m 반복 세트 중간에 50m로 적은 줄이 끼어 있는 경우).
+  if (parsed.laps.some((l) => l.repDist) && parsed.laps.some((l) => !l.repDist && l.timeSec != null)) parsed = lapLinesToLaps(lapLines, true);
+  const { laps, notes } = parsed;
+  // 줄마다 "(100m …)" 로 거리가 적힌 랩들이 있으면 그 거리를 세트 거리로 (제목에 거리가 없을 때)
+  const repDists = laps.filter((l) => l.repDist).map((l) => l.repDist);
+  if (repDists.length && repDists.every((d) => d === repDists[0]) && !(header && header.distance)) {
+    if (!header) header = { distance: null, repCount: null, intervalRaw: null, intervalSec: null, stroke: null, rawHeader: null };
+    header.distance = repDists[0];
+  }
   return { header, laps, notes };
 }
 
@@ -433,7 +482,7 @@ function sniffBlockMeta(lapLines) {
 }
 
 // 한 세트에 속하는 원본 줄들 -> 랩 배열. 라벨 분리 → 화살표 개수 확인 → 슬래시 분리 순으로 처리.
-function lapLinesToLaps(lapLines) {
+function lapLinesToLaps(lapLines, noWhole) {
   const rawLaps = [];
   const notes = []; // 기록이 아닌 설명 줄 → 세트 메모
   let n = 1;
@@ -448,10 +497,12 @@ function lapLinesToLaps(lapLines) {
     }
     const segs = explodeLabelSegments(raw);
     for (const seg of segs) {
-      const body = seg.body.trim();
+      let body = seg.body.trim();
       if (!body) continue;
+      // 괄호에 거리가 있는 줄의 "15.43&16.07" 같은 &는 슬래시와 같은 구분자로 본다
+      if (/\(\s*\d{2,3}\s*m\b/.test(body)) body = body.replace(/(\d)\s*&\s*(?=\d)/g, '$1 / ');
       if (looksLikeSlashGroup(body)) {
-        const laps = expandSlashLine(body, n);
+        const laps = expandSlashLine(body, n, noWhole);
         n += laps.length;
         rawLaps.push(...laps);
       } else {
@@ -465,7 +516,7 @@ function lapLinesToLaps(lapLines) {
   // 시간 없이 휴식만 있는 단독 줄은 직전 랩의 휴식으로 병합
   const merged = [];
   for (const lap of rawLaps) {
-    const restOnly = lap.timeSec === null && lap.restSec !== null && !lap.needsReview;
+    const restOnly = lap.timeSec === null && lap.restSec !== null && !lap.needsReview && !lap.splits && !lap.isMissing;
     // 맨 앞의 "휴식 10초" 같은 줄은 붙일 직전 랩이 없다 → 빈 랩이 아니라 설명(세트 메모)으로 본다
     if (restOnly && !merged.length) { notes.push(lap.rawText); continue; }
     if (restOnly && merged.length && merged[merged.length - 1].restSec === null) {

@@ -353,6 +353,7 @@ function splitsEditorHtml(splits) {
       <input data-sf="distance" type="number" value="${sp.distance ?? ''}" placeholder="25" style="width:50px">m
       <input data-sf="timeRaw" value="${esc(sp.timeRaw)}" placeholder="15.20" style="width:70px">
       <input data-sf="restRaw" value="${esc(sp.restRaw)}" placeholder="휴식 12초" style="width:80px">
+      <input data-sf="strokeCount" type="number" inputmode="numeric" value="${sp.strokeCount ?? ''}" placeholder="스트로크" style="width:72px">
       <button class="ghost sm" data-act="del-split">×</button>
     </span>`).join('')}
     <button class="ghost sm" data-act="add-split">+ 구간 추가</button>
@@ -392,11 +393,21 @@ function wireBlock(b) {
       const sp = lap.splits[+span.dataset.sj];
       span.querySelectorAll('[data-sf]').forEach((input) => {
         const f = input.dataset.sf;
-        input.addEventListener('input', () => { sp[f] = input.type === 'number' ? (input.value === '' ? null : +input.value) : input.value; });
+        input.addEventListener('input', () => {
+          sp[f] = input.type === 'number' ? (input.value === '' ? null : +input.value) : input.value;
+          if (f === 'strokeCount') { // 구간별 스트로크 수가 다 있으면 랩 전체 스트로크 수도 합계로 맞춘다
+            const all = lap.splits.map((s) => s.strokeCount);
+            if (all.every((v) => v != null)) {
+              lap.strokeCount = all.reduce((a, v) => a + v, 0);
+              const lapInput = el.querySelector(`tr[data-i="${srow.dataset.splitsFor}"] [data-f="strokeCount"]`);
+              if (lapInput) lapInput.value = lap.strokeCount;
+            }
+          }
+        });
       });
       span.querySelector('[data-act="del-split"]').onclick = () => { lap.splits.splice(+span.dataset.sj, 1); renderBlockLaps(b); };
     });
-    srow.querySelector('[data-act="add-split"]').onclick = () => { lap.splits.push({ distance: null, timeRaw: '', restRaw: '' }); renderBlockLaps(b); };
+    srow.querySelector('[data-act="add-split"]').onclick = () => { lap.splits.push({ distance: null, timeRaw: '', restRaw: '', strokeCount: null }); renderBlockLaps(b); };
   });
   el.querySelector('[data-act="add-lap"]').onclick = () => {
     b.laps.push({ repNo: b.laps.length + 1, timeRaw: '', restRaw: '', strokeOverride: '', strokeCount: null, splits: [], isMissing: false, needsReview: false, note: '', rawText: '' });
@@ -538,7 +549,7 @@ function splitRowHtml(l, b) {
       <span class="num muted">${metricVal || '—'}</span>
       <span class="small muted">${[stroke, l.note].filter(Boolean).map(esc).join(' · ')}</span>
     </div>
-    ${hasSplits ? `<div class="split-detail" hidden>${splits.map((sp) => `<div class="split-detail-row"><span class="muted">${sp.distance ? sp.distance + 'm 구간' : '구간'}</span><span class="num">${sp.timeRaw ? esc(sp.timeRaw) : '—'}${sp.restRaw ? ` <span class="muted">· 휴식 ${esc(sp.restRaw)}</span>` : ''}</span></div>`).join('')}</div>` : ''}
+    ${hasSplits ? `<div class="split-detail" hidden>${splits.map((sp) => `<div class="split-detail-row"><span class="muted">${sp.distance ? sp.distance + 'm 구간' : '구간'}</span><span class="num">${sp.timeRaw ? esc(sp.timeRaw) : '—'}${sp.strokeCount ? ` <span class="muted">· ${sp.strokeCount}스트로크</span>` : ''}${sp.restRaw ? ` <span class="muted">· 휴식 ${esc(sp.restRaw)}</span>` : ''}</span></div>`).join('')}</div>` : ''}
   </div>`;
 }
 function wireSessionView(container, d) {
@@ -653,9 +664,16 @@ function trendPoints(stroke, distance) {
   return pts.sort((a, b) => a.date.localeCompare(b.date));
 }
 
-// 기록 추이 선택 목록은 종목별로 고정해서 보여줍니다 (자유형/접영/배영/평영 x 25m/50m).
-// 실제로 그 조합의 기록이 없으면 그래프 자리에 "아직 기록이 없습니다"라고만 뜹니다.
-const TREND_COMBOS = ['free', 'fly', 'back', 'breast'].flatMap((s) => [25, 50].map((d) => [s, d]));
+// 기록 추이 선택 목록: 영법(자유형/접영/배영/평영) x 거리(25/50/75/100m)는 기록이 없어도 항상 보여주고,
+// 그 밖에 기록이 있는 거리(200m 등)나 IM은 자동으로 추가합니다. 기록이 없는 조합을 고르면 "아직 기록이 없습니다"가 뜹니다.
+const TREND_STROKES = ['free', 'fly', 'back', 'breast', 'im'];
+const TREND_BASE_DISTANCES = [25, 50, 75, 100];
+function trendCombos() {
+  const set = new Set();
+  TREND_STROKES.slice(0, 4).forEach((s) => TREND_BASE_DISTANCES.forEach((d) => set.add(`${s}|${d}`)));
+  personalBests().forEach((b) => { if (TREND_STROKES.includes(b.stroke)) set.add(`${b.stroke}|${b.distance}`); });
+  return TREND_STROKES.map((s) => ({ stroke: s, dists: [...set].filter((k) => k.startsWith(s + '|')).map((k) => +k.split('|')[1]).sort((a, b) => a - b) })).filter((g) => g.dists.length);
+}
 
 function loadBests() {
   const box = $('#bests');
@@ -670,8 +688,12 @@ function loadBests() {
 
   const pick = $('#trend-pick');
   const prev = pick.value;
-  pick.innerHTML = TREND_COMBOS.map(([stroke, distance]) => `<option value="${stroke}|${distance}">${P.STROKE_LABEL[stroke] || stroke} ${distance}m</option>`).join('');
-  pick.value = TREND_COMBOS.some(([s, d]) => `${s}|${d}` === prev) ? prev : pick.options[0].value;
+  const groups = trendCombos();
+  pick.innerHTML = groups.map((g) => `<optgroup label="${P.STROKE_LABEL[g.stroke]}">${g.dists.map((d) => `<option value="${g.stroke}|${d}">${P.STROKE_LABEL[g.stroke]} ${d}m</option>`).join('')}</optgroup>`).join('');
+  const have = new Set(bestCombos.map((b) => `${b.stroke}|${b.distance}`));
+  const options = [...pick.options];
+  const firstWithData = options.find((o) => have.has(o.value));
+  pick.value = options.some((o) => o.value === prev) ? prev : (firstWithData || options[0]).value;
   loadTrend();
 }
 $('#trend-pick').addEventListener('change', loadTrend);
