@@ -92,6 +92,11 @@ tr.flag{background:var(--warn-bg)}
 .best-tile .l{font-size:11px;color:var(--gold-ink);font-weight:600;letter-spacing:.02em}
 .best-tile .v{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:20px;font-weight:600;margin:2px 0;color:var(--ink)}
 .best-tile .d{font-size:11px;color:var(--mute)}
+.fset{border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:12px;background:var(--s2)}
+.fset .hint{font-size:12px;color:var(--mute);margin:6px 0 0}
+.fset[data-kind="repeat"] [data-for]:not([data-for~="repeat"]),.fset[data-kind="continuous"] [data-for]:not([data-for~="continuous"]),.fset[data-kind="broken"] [data-for]:not([data-for~="broken"]){display:none}
+.fset input,.fset select,.fset textarea{background:var(--s1)}
+.fset textarea{width:100%}
 .period{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
 .period button.on{background:var(--acc);color:var(--acc-ink);border-color:var(--acc);font-weight:600}
 #trend-chart svg{width:100%;height:auto;display:block;font-family:var(--mono)}
@@ -131,14 +136,35 @@ tr.flag{background:var(--warn-bg)}
     </div>
 
     <div class="card">
-      <h2>새 훈련 로그 붙여넣기</h2>
-      <textarea id="raw-text" rows="10" placeholder="예)
+      <h2>새 훈련 기록</h2>
+      <div class="period" id="entry-tabs" role="group" aria-label="입력 방식">
+        <button class="ghost sm on" data-tab="form">양식으로 입력</button>
+        <button class="ghost sm" data-tab="text">텍스트 붙여넣기</button>
+      </div>
+
+      <div id="entry-text" hidden>
+        <textarea id="raw-text" rows="10" placeholder="예)
 9/12(금) 충무
 50m x 8 (1'40&quot;)
 1. 자 33.39
 2. 접 40.12
 ...휴식 45초..."></textarea>
-      <div class="row end"><button class="primary" id="parse-btn">파싱하기</button></div>
+        <div class="row end"><button class="primary" id="parse-btn">파싱하기</button></div>
+      </div>
+
+      <div id="entry-form">
+        <div class="row">
+          <label>날짜<input id="f-date" type="date"></label>
+          <label>장소<input id="f-loc" placeholder="충무" style="width:110px"></label>
+          <label>풀 길이<select id="f-pool"><option value="25">25m</option><option value="50">50m</option></select></label>
+        </div>
+        <div id="fsets"></div>
+        <div class="row end">
+          <button class="ghost" id="f-add">+ 세트 추가</button>
+          <button class="primary" id="f-submit">확인 화면으로</button>
+        </div>
+        <p class="small muted" style="margin:10px 0 0">웜업·메인·다운처럼 훈련이 여러 개면 세트를 추가하세요. 기록은 한 칸에 공백이나 줄바꿈으로 이어서 적으면 됩니다.</p>
+      </div>
     </div>
 
     <div id="draft-card" class="card" hidden></div>
@@ -160,7 +186,7 @@ tr.flag{background:var(--warn-bg)}
 </div>
 <div id="toast" hidden></div>
 
-<script src="parser.js?v=8"></script>
-<script src="app.js?v=8"></script>
+<script src="parser.js?v=10"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>

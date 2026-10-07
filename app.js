@@ -68,6 +68,132 @@ $('#parse-btn').addEventListener('click', () => {
   renderDraft();
   $('#draft-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
+// ── 양식으로 입력 ──
+// 방식(반복·인터벌 / 연속 / 브로큰)을 고르면 그 방식에 필요한 칸만 보이고, 기록은 한 칸에 몰아서 적는다.
+// 결과는 붙여넣기와 똑같은 "확인 화면"(draftDays)으로 넘어가서, 저장·수정·그래프가 그대로 동작한다.
+const KINDS = {
+  repeat: { times: '기록 (랩마다, 공백·줄바꿈으로 구분)', ph: '33.39 31.58 31.61 33.50', hint: '같은 거리를 여러 번 반복. 인터벌은 출발 간격, 휴식은 쉬는 시간입니다.', dist: '거리(m)' },
+  continuous: { times: '구간 기록 (선택, 25m 지점마다)', ph: '15.2 16.1', hint: '쉬지 않고 한 번에 헤엄. 총 기록만 적어도 되고, 구간 기록을 적으면 펼쳐 볼 수 있습니다.', dist: '거리(m)' },
+  broken: { times: '구간 기록 (한 줄 = 한 세트)', ph: '32.64 15.86 16.72\n32.98 17.23 17.07', hint: '총거리를 끊어서 헤엄(중간에 짧게 휴식). 구간 거리를 비우면 기록 속도로 알아서 맞춥니다.', dist: '총거리(m)' },
+};
+const timeTokens = (txt) => String(txt || '').split(/[\s,\/]+/).map((s) => s.trim()).filter(Boolean).map((t) => t.replace(/^(\d+):(\d+(?:\.\d+)?)$/, "$1'$2"));
+const restText = (v) => { const t = String(v || '').trim(); return /^\d+(\.\d+)?$/.test(t) ? t + '초' : t; };
+function formLap(tok, i, rest) {
+  const sec = tok ? P.toSeconds(tok) : null;
+  return { repNo: i + 1, timeRaw: tok || '', restRaw: rest || '', strokeOverride: '', strokeCount: null, splits: [], isMissing: false, needsReview: !!tok && sec == null, note: '', rawText: tok || '' };
+}
+// 구간(splits) 만들기: 구간 거리를 적었으면 그대로, 아니면 총거리와 기록 속도로 추정
+function formSplits(toks, total, segText, rest) {
+  const secs = toks.map((t) => P.toSeconds(t));
+  const segList = String(segText || '').split(/[\s,\/]+/).filter(Boolean).map(Number).filter((n) => n > 0);
+  let dists = toks.map(() => null);
+  if (segList.length === toks.length) dists = segList;
+  else if (segList.length === 1) dists = toks.map(() => segList[0]);
+  const splits = toks.map((t, j) => ({ distance: dists[j], timeRaw: t, restRaw: j < toks.length - 1 ? rest : '' }));
+  let note = '';
+  if (total && splits.some((s) => !s.distance)) {
+    const inf = P.inferSplitDistances(splits, total, secs);
+    if (inf) { inf.dists.forEach((d, k) => { splits[inf.idx[k]].distance = d; }); if (inf.ambiguous) note = '구간 거리를 추정했습니다 — 맞는지 확인해 주세요'; }
+  }
+  if (total && splits.every((s) => s.distance)) {
+    const sum = splits.reduce((a, s) => a + s.distance, 0);
+    if (sum !== total) note = `구간 거리 합(${sum}m)이 총거리(${total}m)와 다릅니다`;
+  }
+  const bad = secs.some((s) => s == null);
+  const sumSec = bad ? null : Math.round(secs.reduce((a, s) => a + s, 0) * 100) / 100;
+  return { splits, note, bad, sumSec };
+}
+function readFormSet(el) {
+  const v = (k) => (el.querySelector(`[data-k="${k}"]`) || {}).value || '';
+  const kind = v('kind'), stroke = v('stroke'), setType = v('setType'), memo = v('memo').trim();
+  const dist = +v('distance') || null, rest = restText(v('rest'));
+  const base = { setType, stroke, memo, broken: false, intervalRaw: '' };
+  if (kind === 'broken') {
+    const lines = v('times').split('\n').map(timeTokens).filter((a) => a.length);
+    return lines.map((toks, i) => {
+      const { splits, note, bad, sumSec } = formSplits(toks, dist, v('segDist'), rest);
+      const lap = { repNo: 1, timeRaw: sumSec != null ? P.fmtSec(sumSec) : '', restRaw: '', strokeOverride: '', strokeCount: null, splits, isMissing: false, needsReview: bad || !!note, note, rawText: `S${i + 1}` };
+      return { ...base, key: uid(), distance: dist, repCount: 1, rawHeader: `S${i + 1}`, broken: true, memo: [`${P.STROKE_LABEL[stroke] || ''} ${dist || ''}${dist ? 'm' : ''} ${i + 1}세트`.trim(), memo].filter(Boolean).join('\n'), laps: [lap] };
+    });
+  }
+  const toks = timeTokens(v('times'));
+  if (kind === 'continuous') {
+    const totalTok = timeTokens(v('total'))[0] || '';
+    if (!dist && !toks.length && !totalTok) return [];
+    const { splits, note, bad, sumSec } = toks.length ? formSplits(toks, dist, v('segDist'), '') : { splits: [], note: '', bad: false, sumSec: null };
+    const lap = formLap(totalTok || (sumSec != null ? P.fmtSec(sumSec) : ''), 0, '');
+    lap.splits = splits; lap.note = note; lap.needsReview = lap.needsReview || bad || !!note;
+    return [{ ...base, key: uid(), distance: dist, repCount: 1, rawHeader: `${dist || ''}${dist ? 'm ' : ''}연속`.trim(), laps: [lap] }];
+  }
+  const reps = Math.max(+v('reps') || 0, toks.length);
+  if (!dist && !reps) return [];
+  const laps = Array.from({ length: reps }, (_, i) => formLap(toks[i] || '', i, i < reps - 1 ? rest : ''));
+  const interval = v('interval').trim();
+  return [{ ...base, key: uid(), distance: dist, repCount: reps || null, intervalRaw: interval, rawHeader: `${dist || ''}${dist ? 'm ' : ''}x${reps}${interval ? ` @${interval}` : ''}`.trim(), laps }];
+}
+function fsetHtml() {
+  return `<div class="fset" data-kind="repeat">
+    <div class="row" style="justify-content:space-between;align-items:flex-end;margin-top:0">
+      <div class="row" style="margin:0">
+        <label>방식<select data-k="kind"><option value="repeat">반복·인터벌</option><option value="continuous">연속</option><option value="broken">브로큰</option></select></label>
+        <label>종류<select data-k="setType">${SET_TYPES.map(([x, l]) => `<option value="${x}"${x === 'main' ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label>영법<select data-k="stroke">${STROKES.slice(1).map(([x, l]) => `<option value="${x}">${l}</option>`).join('')}</select></label>
+      </div>
+      <button class="ghost sm" data-act="f-del">삭제</button>
+    </div>
+    <div class="row">
+      <label><span class="lbl-dist">거리(m)</span><input data-k="distance" type="number" inputmode="numeric" placeholder="50" style="width:84px"></label>
+      <label data-for="repeat">횟수<input data-k="reps" type="number" inputmode="numeric" placeholder="8" style="width:64px"></label>
+      <label data-for="repeat">인터벌<input data-k="interval" placeholder="1'40&quot;" style="width:84px"></label>
+      <label data-for="repeat broken"><span class="lbl-rest">휴식</span><input data-k="rest" placeholder="45초" style="width:92px"></label>
+      <label data-for="continuous broken">구간 거리<input data-k="segDist" placeholder="비우면 자동" style="width:104px"></label>
+      <label data-for="continuous">총 기록<input data-k="total" placeholder="1'05.22" style="width:92px"></label>
+    </div>
+    <label class="block"><span class="lbl-times"></span><textarea data-k="times" rows="3"></textarea></label>
+    <label class="block">메모 (선택)<input data-k="memo" placeholder="컨디션, 특이사항 등"></label>
+    <p class="hint"></p>
+  </div>`;
+}
+function applyKind(el) {
+  const kind = el.querySelector('[data-k="kind"]').value, K = KINDS[kind];
+  el.dataset.kind = kind;
+  el.querySelector('.lbl-dist').textContent = K.dist;
+  el.querySelector('.lbl-rest').textContent = kind === 'broken' ? '구간 휴식' : '휴식';
+  el.querySelector('.lbl-times').textContent = K.times;
+  const ta = el.querySelector('[data-k="times"]');
+  ta.placeholder = K.ph; ta.rows = kind === 'broken' ? 4 : 3;
+  el.querySelector('.hint').textContent = K.hint;
+}
+function addFormSet() {
+  const wrap = document.createElement('div');
+  wrap.innerHTML = fsetHtml();
+  const el = wrap.firstElementChild;
+  el.querySelector('[data-k="kind"]').addEventListener('change', () => applyKind(el));
+  el.querySelector('[data-act="f-del"]').onclick = () => { el.remove(); if (!$('#fsets').children.length) addFormSet(); };
+  $('#fsets').appendChild(el);
+  applyKind(el);
+}
+$('#f-add').addEventListener('click', addFormSet);
+$('#f-submit').addEventListener('click', () => {
+  const blocks = $$('#fsets .fset').flatMap(readFormSet);
+  if (!blocks.length) return toast('거리나 기록을 입력해 주세요');
+  draftDays = [dayToDraftFromForm(blocks)];
+  renderDraft();
+  $('#draft-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+function dayToDraftFromForm(blocks) {
+  return { date: $('#f-date').value || today(), location: $('#f-loc').value.trim(), poolLength: +$('#f-pool').value || 25, condition: '', blocks };
+}
+$('#f-date').value = today();
+addFormSet();
+$('#entry-tabs').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-tab]');
+  if (!btn) return;
+  $$('#entry-tabs button').forEach((b) => b.classList.toggle('on', b === btn));
+  $('#entry-form').hidden = btn.dataset.tab !== 'form';
+  $('#entry-text').hidden = btn.dataset.tab !== 'text';
+});
+
 function dayToDraft(day, di) {
   return {
     date: day.date, location: day.location || '', poolLength: day.poolLength || 25, condition: day.note || '',

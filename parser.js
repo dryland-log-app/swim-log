@@ -309,7 +309,7 @@ const BROKEN_REST_RE = /(?:휴식|쉬는\s*시간)(?:\s*시간)?\s*:?\s*(\d+(?:\
 function seriesFromNotes(notes) {
   const line = (notes || []).find((l) => /\d{2,3}\s*m/i.test(l) && /\d+\s*세트/.test(l));
   if (!line) return null;
-  const label = line.replace(/브로큰|broken/gi, '').replace(/\d+\s*세트/g, '').replace(/[,·]/g, ' ').replace(/\s+/g, ' ').trim();
+  const label = line.replace(/브로큰|broken/gi, '').replace(/\d+\s*세트/g, '').replace(/[,·]/g, ' ').replace(/([가-힣])(\d)/g, '$1 $2').replace(/\s+/g, ' ').trim();
   return label ? { line, label } : null;
 }
 function finalizeBrokenSets(blocks) {
@@ -359,6 +359,12 @@ function toBroken(b, prev, noteText) {
   });
   if (!h.stroke && prev) h.stroke = prev.header.stroke;
   if (!h.distance && sameCount) h.distance = prev.header.distance;
+  // 구간 거리를 안 적었으면, 총거리와 기록 속도로 알아서 맞춘다 (32초대 → 50m, 15~16초대 → 25m)
+  let inferNote = null;
+  if (h.distance && splits.some((s) => !s.distance)) {
+    const inf = inferSplitDistances(splits, h.distance, src.map((l) => l.timeSec));
+    if (inf) { inf.dists.forEach((d, k) => { splits[inf.idx[k]].distance = d; }); if (inf.ambiguous) inferNote = '구간 거리를 추정했습니다 — 맞는지 확인해 주세요'; }
+  }
   const known = splits.every((s) => s.distance);
   const sum = known ? splits.reduce((a, s) => a + s.distance, 0) : null;
   if (!h.distance && known) h.distance = sum;
@@ -366,7 +372,36 @@ function toBroken(b, prev, noteText) {
   const total = Math.round(src.reduce((a, l) => a + (l.timeSec || 0), 0) * 100) / 100;
   // 총거리와 구간 거리의 합이 다르면 사람이 한 번 보도록 표시
   const mismatch = known && h.distance && sum !== h.distance;
-  b.laps = [{ repNo: 1, timeSec: total, restSec: null, strokeOverride: null, strokeCount: null, isMissing: false, needsReview: mismatch || src.some((l) => l.needsReview), note: mismatch ? `구간 거리 합(${sum}m)이 총거리(${h.distance}m)와 다릅니다` : null, rawText: h.rawHeader, splits }];
+  b.laps = [{ repNo: 1, timeSec: total, restSec: null, strokeOverride: null, strokeCount: null, isMissing: false, needsReview: mismatch || !!inferNote || src.some((l) => l.needsReview), note: mismatch ? `구간 거리 합(${sum}m)이 총거리(${h.distance}m)와 다릅니다` : inferNote, rawText: h.rawHeader, splits }];
+}
+
+// 총거리 안에서 거리가 비어 있는 구간들을 25m 단위로 나눠 채운다. 모든 가능한 조합 중
+// "25m당 속도"가 구간끼리 가장 고른 조합을 고른다 (예: 100m = 50+25+25, 기록 32.6/15.9/16.7).
+// 1·2등 조합이 비슷하면(기록이 똑같아 구분 불가 등) ambiguous로 알려 사람이 확인하게 한다.
+function inferSplitDistances(splits, total, times) {
+  const UNIT = 25;
+  if (times.some((t) => t == null)) return null;
+  const idx = splits.map((s, i) => (s.distance ? -1 : i)).filter((i) => i >= 0);
+  const rem = total - splits.reduce((a, s) => a + (s.distance || 0), 0);
+  if (!idx.length || rem <= 0 || rem % UNIT) return null;
+  const units = rem / UNIT;
+  if (units < idx.length || units > 24) return null;
+  const results = [];
+  const cur = new Array(idx.length);
+  const rec = (k, left) => {
+    if (k === idx.length - 1) {
+      cur[k] = left;
+      const paces = times.map((t, i) => { const j = idx.indexOf(i); return t / (j >= 0 ? cur[j] : splits[i].distance / UNIT); });
+      const mean = paces.reduce((a, p) => a + p, 0) / paces.length;
+      results.push({ comp: cur.slice(), score: paces.reduce((a, p) => a + (p - mean) ** 2, 0) / paces.length });
+      return;
+    }
+    for (let u = 1; u <= left - (idx.length - 1 - k); u++) { cur[k] = u; rec(k + 1, left - u); }
+  };
+  rec(0, units);
+  results.sort((a, b) => a.score - b.score || b.comp[0] - a.comp[0]);
+  const ambiguous = results.length > 1 && results[1].score < results[0].score * 2 + 0.05;
+  return { idx, dists: results[0].comp.map((u) => u * UNIT), ambiguous };
 }
 
 function sniffBlockMeta(lapLines) {
@@ -535,6 +570,6 @@ function fmtSec(sec) {
   return m > 0 ? `${m}'${sTxt.padStart(s < 10 ? 5 : 0, '0')}` : sTxt;
 }
 
-const SwimParser = { parseSwimBlock, parseSetHeader, parseLapLine, toSeconds, splitSwimText, splitSwimLog, parseSessionMeta, parseDayHeader, STROKE_LABEL, fmtSec };
+const SwimParser = { parseSwimBlock, parseSetHeader, parseLapLine, toSeconds, splitSwimText, splitSwimLog, parseSessionMeta, parseDayHeader, STROKE_LABEL, fmtSec, inferSplitDistances };
 if (typeof module !== 'undefined') module.exports = SwimParser;
 if (typeof window !== 'undefined') window.SwimParser = SwimParser;
