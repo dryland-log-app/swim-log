@@ -115,11 +115,23 @@ function parseOrphanHeader(line) {
   if (parseSetHeader(line) || parseNamedHeader(line)) return null;
   const t = line.trim();
   if (!t) return null;
+  // "자유형50m", "자유형 100m" 처럼 영법+거리만 있는 제목 줄
+  const bare = t.replace(/^[*\-]\s*/, '').match(/^([가-힣]{1,3})\s*(\d{2,3})\s*m\s*[:：]?\s*$/);
+  if (bare && STROKE_MAP[bare[1]]) return { distance: parseInt(bare[2]), repCount: null, intervalRaw: null, intervalSec: null, stroke: STROKE_MAP[bare[1]], rawHeader: `${bare[1]} ${bare[2]}m` };
   if (/\d+['.]\d/.test(t)) return null;
   if (/^\d+[.).]/.test(t)) return null;
   if (!/\)\s*$/.test(t)) return null;
   const distM = t.match(/(\d{2,3})m/);
   return { distance: distM ? parseInt(distM[1]) : null, repCount: null, intervalRaw: null, intervalSec: null, stroke: findStroke(t), rawHeader: t };
+}
+
+// "자유형 50m 30.18 → 2'46" 휴식", "자유형 50m: 29.26" 처럼 영법+거리와 첫 기록이 한 줄에 같이 있는 줄.
+// 앞 세트와 거리가 다를 수 있어서 새 세트의 시작으로 보고, 나머지(기록 부분)는 그 세트의 첫 랩 줄로 넘긴다.
+function parseInlineHeader(line) {
+  const m = line.trim().replace(/^[*\-]\s*/, '').match(/^([가-힣]{1,3})\s*(\d{2,3})\s*m\s*[:：]?\s*(\d.*)$/);
+  if (!m || !STROKE_MAP[m[1]]) return null;
+  if (toSeconds(m[3].split(/[\s&,]+/)[0]) == null) return null;
+  return { header: { distance: parseInt(m[2]), repCount: null, intervalRaw: null, intervalSec: null, stroke: STROKE_MAP[m[1]], rawHeader: `${m[1]} ${m[2]}m` }, rest: m[3] };
 }
 
 // ── 랩 한 줄에서 부가 정보를 하나씩 뽑아내는 조각 함수들 (원본 parseLapLine과 동일한 규칙) ──
@@ -273,6 +285,8 @@ function parseSwimBlock(rawText) {
   let header = null;
   const lapLines = [];
   for (const line of lines) {
+    const inl = !header && parseInlineHeader(line);
+    if (inl) { header = inl.header; lapLines.push(inl.rest); continue; }
     const h = parseSNumberHeader(line) || parseSetHeader(line) || parseNamedHeader(line) || parseOrphanHeader(line);
     if (h && !header) { header = h; continue; }
     lapLines.push(line);
@@ -297,7 +311,7 @@ function parseSwimBlock(rawText) {
 // (그 앞이 설명 줄뿐이면 설명은 첫 S 세트의 메모로 붙는다).
 function startsNewBlock(trimmed, current) {
   if (parseSNumberHeader(trimmed)) return current.some((l) => /\d+['’]\d|\d+\.\d/.test(l));
-  return !!(parseSetHeader(trimmed) || parseNamedHeader(trimmed) || parseOrphanHeader(trimmed)) && current.some((l) => l.trim());
+  return !!(parseSetHeader(trimmed) || parseNamedHeader(trimmed) || parseOrphanHeader(trimmed) || parseInlineHeader(trimmed)) && current.some((l) => l.trim());
 }
 
 // S세트 → 브로큰 스윔 판단과 변환. 브로큰이면 랩 여러 개가 아니라 "한 번의 총거리 + 구간기록(splits)"으로 저장.

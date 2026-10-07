@@ -624,8 +624,9 @@ function personalBests() {
         if (l.isMissing || !l.timeRaw) continue;
         const t = P.toSeconds(l.timeRaw);
         if (t == null) continue;
-        const key = b.stroke + '|' + b.distance;
-        if (!map[key] || t < map[key].best_time_sec) map[key] = { stroke: b.stroke, distance: b.distance, best_time_sec: t, best_date: s.date };
+        const stroke = l.strokeOverride || b.stroke; // 랩에 영법이 따로 적혀 있으면(혼합 세트의 자/접 등) 그걸 우선
+        const key = stroke + '|' + b.distance;
+        if (!map[key] || t < map[key].best_time_sec) map[key] = { stroke, distance: b.distance, best_time_sec: t, best_date: s.date };
       }
     }
   }
@@ -639,9 +640,9 @@ function trendPoints(stroke, distance) {
   const bestByDate = {};
   for (const s of S.sessions) {
     for (const b of s.blocks) {
-      if (b.broken || b.stroke !== stroke || b.distance !== distance) continue;
+      if (b.broken || b.distance !== distance) continue;
       for (const l of b.laps) {
-        if (l.isMissing || !l.timeRaw) continue;
+        if (l.isMissing || !l.timeRaw || (l.strokeOverride || b.stroke) !== stroke) continue;
         const t = P.toSeconds(l.timeRaw);
         if (t == null) continue;
         if (!(s.date in bestByDate) || t < bestByDate[s.date]) bestByDate[s.date] = t;
